@@ -1,7 +1,7 @@
 # openpi-RLT 完整复现计划
 
 > **状态：** 规划完成，等待按阶段人工执行。  
-> **最后更新：** 2026-08-29  
+> **最后更新：** 2026-08-31
 > **执行原则：** 本计划默认由学习者亲自逐步执行。助手应先解释每一步的目标、原理、命令、预期输出与常见故障，再等待用户确认结果；除非用户明确要求“自动执行某项工作”，否则不得自行安装依赖、修改配置、启动训练、下载大文件或运行长时间任务。
 
 相关理论参考：[RLT_THEORY_REFERENCE.zh-CN.md](RLT_THEORY_REFERENCE.zh-CN.md)。  
@@ -51,7 +51,8 @@
 ### 硬件与拓扑
 
 - 本机 RTX 5070 Ti（约 16 GB 显存）：用于代码阅读、轻量测试、fake 服务和配置验证；不作为正式大模型训练主机。
-- 百舸云 Pro6000 服务器：作为正式训练和仿真平台；可按需创建子开发机、分配 CPU、内存和 GPU。
+- 本机 RTX 5070 Ti：优先完成源码理解、uv 环境、轻量测试和 fake/synthetic 验证；不要求承载完整 Pi0 模型。
+- 百舸云 Pro6000 服务器：作为正式训练和仿真平台；本地验证通过后再同步代码和环境，按需创建开发机、分配 CPU、内存和 GPU。
 - 初期采用**单机多进程/多 GPU**模拟 Machine A 与 Machine B；后续如有需要再拆分到多机局域网。
 
 推荐 GPU 分工：
@@ -162,19 +163,17 @@ uv --version
 
 ```bash
 cd /path/to/openpi-RLT
-uv sync
-uv pip install -e .
+uv sync --locked
 ```
 
 在线 RL 子项目（Python 3.10）预期命令：
 
 ```bash
-cd /path/to/openpi-RLT/rlt_online_rl
-conda create -y -n rlt_online_rl310 python=3.10 pip
-conda activate rlt_online_rl310
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e ../packages/openpi-client
-python -m pip install -e .
+cd /path/to/openpi-RLT
+uv venv --python 3.10 rlt_online_rl/.venv
+uv pip install --python rlt_online_rl/.venv/bin/python \
+  -e packages/openpi-client \
+  -e 'rlt_online_rl[dev]'
 ```
 
 **应先解释的重点：**

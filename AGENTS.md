@@ -70,14 +70,15 @@ BC target：
 
 当前路线：
 
-1. 在百舸云 Pro6000 开发机验证环境；
-2. 跑通现有测试；
+1. 本地用 uv 建立根项目和在线 RL 环境，完成软件链路验证；
+2. 跑通轻量测试并记录本机 GPU 兼容性限制；
 3. 用 fake/synthetic 数据验证 RLT 阶段 1；
-4. 用公开 LeRobot 数据跑短训练；
-5. 验证 Machine A 和 Machine B；
-6. 新增 ManiSkill adapter；
-7. 在仿真中跑通 warmup、replay、learner、snapshot 闭环；
-8. 之后才规划 ROS/AgileX 真实机器人。
+4. 将已验证代码同步到百舸云 Pro6000 开发机；
+5. 在云端完成完整测试、模型下载和正式训练；
+6. 验证 Machine A 和 Machine B；
+7. 新增 ManiSkill adapter；
+8. 在仿真中跑通 warmup、replay、learner、snapshot 闭环；
+9. 之后才规划 ROS/AgileX 真实机器人。
 
 首轮验收是**软件链路全通和算法单测**，不是立即复现真实 Ethernet insertion 成功率。
 
@@ -107,7 +108,7 @@ BC target：
 ## 6. 运行环境与兼容性
 
 - 根 openpi/RLT 项目：Python `>=3.11`，使用 `uv`；
-- `rlt_online_rl`：Python `>=3.10,<3.11`，建议独立 Conda 环境；
+- `rlt_online_rl`：Python `>=3.10,<3.11`，使用独立的 uv 虚拟环境 `rlt_online_rl/.venv`；
 - 真实机器人相关：ROS2 Humble；
 - 正式训练目标：百舸云 Pro6000 多 GPU；
 - 本机 RTX 5070 Ti：轻量验证和开发，不作为正式大模型训练基线。

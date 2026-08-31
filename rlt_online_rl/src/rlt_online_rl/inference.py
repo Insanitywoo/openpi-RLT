@@ -295,6 +295,10 @@ class ActorService:
         self._poll_thread: threading.Thread | None = None
         self._logged_missing_params = False
         self._packer = msgpack_numpy.Packer()
+        # Load an already-published snapshot synchronously before serving requests.
+        # The background poller remains responsible for subsequent hot updates, but
+        # the initial request should not depend on a thread scheduling race.
+        self._try_reload_snapshot()
         self._start_param_poller()
 
     def infer(self, request: ActorRequest) -> ActorResponse:
