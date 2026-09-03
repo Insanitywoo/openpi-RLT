@@ -121,3 +121,38 @@ BC target：
 2. `RLT_THEORY_REFERENCE.zh-CN.md`：RLT 理论与算法；
 3. `rlt_online_rl/README.zh-CN.md`：在线运行时说明；
 4. `REPRODUCTION_PLAN.zh-CN.md`：长期执行计划和阶段验收。
+
+## 8. 云端开发机访问约定
+
+本项目的正式训练与完整运行环境位于百舸云开发机；本地主要用于源码阅读、代码修改、文档和 Git 管理。当前本机已配置 SSH 别名：
+
+```text
+openpi-rlt
+```
+
+代理需要在云端执行环境相关工作时，默认通过 SSH 使用该别名访问远程开发机：
+
+```bash
+ssh openpi-rlt '<远程命令>'
+```
+
+远程项目工作区约定为：
+
+```text
+/root/workspace/openpi-RLT
+```
+
+云端操作默认分工：
+
+- 本地：源码分析、跨环境代码修改、文档维护、Git commit/push；
+- 云端：GPU/磁盘检查、uv 环境、依赖安装、模型和数据下载、完整测试、训练、服务与仿真。
+
+当用户说“在云端”“开发机上”“云端训练”或“查看云端状态”时，默认理解为通过 `ssh openpi-rlt` 执行；不要求云端安装第二份 Codex。若云端项目尚未 clone，先通过 Git 将本地已推送提交同步到云端。
+
+安全约定：
+
+- SSH 私钥只保留在本机 `~/.ssh/`，不得写入项目或提交 Git；
+- SSH 连接参数和私钥路径不得写入公开仓库；项目只记录别名 `openpi-rlt`；
+- 长时间命令使用 `tmux` 或 `nohup`，并把日志写入持久化目录；
+- 删除 checkpoint、清理 replay、使用 `--overwrite`、停止已有训练或启动高成本长任务前，必须向用户说明影响；
+- Machine A、Actor、Replay 初期只监听 `127.0.0.1`，不默认暴露公网端口。
