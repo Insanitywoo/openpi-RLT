@@ -110,7 +110,7 @@ BC target：
 - 根 openpi/RLT 项目：Python `>=3.11`，使用 `uv`；
 - `rlt_online_rl`：Python `>=3.10,<3.11`，使用独立的 uv 虚拟环境 `rlt_online_rl/.venv`；
 - 真实机器人相关：ROS2 Humble；
-- 正式训练目标：百舸云 Pro6000 多 GPU；
+- 正式训练目标：百舸云 B300 单卡起步，后续按需要扩展到多 GPU；
 - 本机 RTX 5070 Ti：轻量验证和开发，不作为正式大模型训练基线。
 
 不要混用两个 Python 环境。涉及 GPU 时优先显式设置进程 GPU 分配，并记录驱动、JAX 和 CUDA 信息。
@@ -136,11 +136,46 @@ openpi-rlt
 ssh openpi-rlt '<远程命令>'
 ```
 
-远程项目工作区约定为：
+远程项目工作区约定为（代码与大文件分离）：
 
 ```text
-/root/workspace/openpi-RLT
+/mnt/cfs/usr/wujh/openpi-RLT/repo/openpi-RLT
 ```
+
+云端个人实验根目录为：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT
+```
+
+其中 `repo/` 放代码，数据、模型、checkpoint、日志、replay、实验输出和可复用下载缓存放在对应的 CFS 持久化目录中。
+
+**系统盘与 CFS 分工是硬规则：**
+
+- 系统盘（`/root/workspace`）放运行时软件、`git`、`tmux`、uv 下载的 Python、两个 `.venv`、`site-packages` 以及临时编译产物；
+- CFS（`/mnt/cfs/usr/wujh/openpi-RLT`）放代码、数据集、预训练权重、checkpoint、replay、日志、实验结果和 Hugging Face/W&B 等大文件缓存；
+- 不在 CFS 创建 Python 虚拟环境；不把长期资产放在系统盘；
+- `/root/workspace` 可能随开发机重建而丢失，只能保存可重建的环境；CFS 是长期持久化位置。
+
+推荐系统盘环境位置：
+
+```text
+/root/workspace/openpi-rlt-system/openpi311/.venv
+/root/workspace/openpi-rlt-system/online-rl310/.venv
+```
+
+推荐 CFS 环境变量：
+
+```bash
+export OPENPI_CFS_ROOT=/mnt/cfs/usr/wujh/openpi-RLT
+export OPENPI_REPO="$OPENPI_CFS_ROOT/repo/openpi-RLT"
+export HF_HOME="$OPENPI_CFS_ROOT/cache/huggingface"
+export XDG_CACHE_HOME="$OPENPI_CFS_ROOT/cache"
+export WANDB_DIR="$OPENPI_CFS_ROOT/cache/wandb"
+export UV_CACHE_DIR="$OPENPI_CFS_ROOT/cache/uv"
+```
+
+这些变量只是在当前 shell 中给程序提供“代码、数据和缓存应该去哪”的路径，不会自动创建目录，也不会安装依赖。需要持久化时，应将它们写入系统盘上的个人 shell 配置或项目启动脚本，而不是依赖临时手工输入。`/root/workspace` 仅作为容器临时工作区。
 
 云端操作默认分工：
 
