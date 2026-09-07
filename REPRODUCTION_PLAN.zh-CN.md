@@ -2,7 +2,7 @@
 
 > **版本：** v2（Pi0 + ALOHA + fake 环境 + ManiSkill）
 > **状态：** 已确定路线，按阶段交互式执行
-> **最后更新：** 2026-09-04
+> **最后更新：** 2026-09-07
 > **执行原则：** 助手每次只讲一个小步骤；先解释目标、原理、命令、预期输出和故障，再由用户亲自执行并反馈。除非用户明确要求自动执行，否则不自动安装依赖、下载大文件、修改训练配置或启动长任务。
 
 ## 1. 本轮目标与边界
@@ -164,13 +164,14 @@ VLA reference warmup
 
 ### 阶段 0：云端基础环境
 
-1. `source /root/workspace/openpi-rlt-system/env.sh`；
-2. 检查系统盘、CFS、GPU、Python、uv；
+1. 通过 SSH 别名 `openpi-rlt` 登录开发机；
+2. 只读检查系统盘、CFS、GPU、CPU、内存、Python 和 uv；
 3. 安装 `git`、`tmux` 等基础工具；
-4. 将最新代码 clone 到 CFS 的 `repo/openpi-RLT`；
-5. 确认代码目录和环境目录位置没有混淆。
+4. 在系统盘创建 `/root/workspace/openpi-rlt-system/env.sh`，将代码、数据、权重和缓存路径指向正确位置；
+5. 用 Git 验证 CFS 现有仓库和待执行提交一致；只有仓库缺失时才 clone 到 `repo/openpi-RLT`；
+6. 确认代码在 CFS、两个虚拟环境在系统盘，目录没有混淆。
 
-验收：CFS repo 可写、系统盘空间充足、B300 可见、代码完整。
+验收：CFS repo 可写、系统盘空间充足、实际 GPU 可见、代码提交可确认、环境路径符合系统盘/CFS 分工。
 
 ### 阶段 1：两个 uv 环境
 
@@ -253,17 +254,20 @@ rlt_pi0_aloha_joint
 
 每一级检查 loss、显存、checkpoint、恢复和日志。
 
-### 阶段 6：Machine A
+### 阶段 6：Machine A 与部署 contract
 
-使用 `scripts/serve_rlt_policy.py` 加载 RLT checkpoint，验证：
+使用 `scripts/serve_rlt_policy.py` 加载 RLT checkpoint，并在联调前解决任务动作 contract：
 
 ```text
 输入 observation
 → z_rl
+→ proprio
 → ref_chunk
 ```
 
-先单进程本机回环，再接 online RL。初期只监听 `127.0.0.1`，不暴露公网端口。检查单请求、重复请求、batch、超时、断连和重启恢复。
+当前 `AlohaOutputs` 返回 14 维双臂动作，而服务端固定输出 7 维动作、50-step chunk，AgileX online RL 配置消费 7 维动作、10-step chunk。Pi0 + ALOHA 可先作为 RLT 阶段一训练基线，但进入在线 RL 前必须通过参数化服务输出或独立 ALOHA/ManiSkill adapter 明确动作维度、关节顺序、单位和语义，不能只依赖数组裁剪。
+
+当前服务还硬编码监听 `0.0.0.0` 且没有 `--host`。云端启动前应增加本机监听选项，或确认平台网络层阻止公网访问。之后再检查模型加载、单请求、重复请求、batch、超时、断连和重启恢复。
 
 ### 阶段 7：fake Machine A + fake 环境
 
@@ -352,27 +356,40 @@ fallback 次数
 
 ## 6. 当前执行顺序
 
-当前已经完成：
+截至 2026-09-07，已经完成：
 
 ```text
+本机双 uv 环境和轻量软件验证
+SSH 别名 openpi-rlt
+云端 GPU、CPU、内存、系统盘和 CFS 只读勘测
 CFS 个人目录架构
-系统盘运行时根目录
-env.sh 环境变量脚本
+云端仓库已存在，main 指向提交 189a28d
+云端 uv 0.10.12 可用
 路线选择：Pi0 + ALOHA
 仿真路线：fake 环境 → ManiSkill
 ```
 
-当前下一步只做：
+云端当前尚未完成：
 
 ```text
-加载 env.sh
-→ 检查 git、tmux、系统盘空间、GPU、CFS repo 是否为空
+git、tmux 安装
+/root/workspace/openpi-rlt-system/env.sh
+/root/workspace/openpi-rlt-system/openpi311/.venv
+/root/workspace/openpi-rlt-system/online-rl310/.venv
+根项目和在线 RL 依赖安装
+云端 JAX/PyTorch GPU 验收
+云端测试和训练
 ```
 
-检查通过后才：
+当前下一步按顺序执行：
 
 ```text
-安装基础工具
-→ clone 代码
+安装 git、tmux
+→ 创建并加载系统盘 env.sh
+→ 用 git 验证现有 CFS 仓库和本地提交一致
 → 创建两个系统盘 uv 环境
+→ 运行导入、GPU 和测试验收
 ```
+
+完整的可复制命令、路径和成功判据见
+[CLOUD_DEPLOYMENT_GUIDE.zh-CN.md](CLOUD_DEPLOYMENT_GUIDE.zh-CN.md)。

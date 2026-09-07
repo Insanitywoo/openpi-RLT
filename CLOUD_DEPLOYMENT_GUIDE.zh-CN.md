@@ -1,460 +1,1005 @@
-# openpi-RLT 云端部署与完整训练指南
+# openpi-RLT 百舸云部署与训练指南
 
-> **最后更新：** 2026-09-03  
-> **适用目标：** 在具备充足 GPU 算力的百舸云开发机上，复现 openpi-RLT 的完整软件、RLT 阶段 1 训练和后续 Machine A / Machine B 链路。  
-> **执行原则：** 先做可验证的单卡 smoke test，再扩大到多卡训练；不要跳过环境、数据与 checkpoint 验收步骤。
+> **最后更新：** 2026-09-07
+> **适用环境：** 当前通过 SSH 别名 `openpi-rlt` 访问的百舸云单 GPU 开发机。
+> **当前路线：** 单卡基础环境 → 软件与算法测试 → fake RLT smoke → Pi0 + 公开 ALOHA → Machine A / Machine B → fake 环境 → ManiSkill。
+> **执行原则：** 每一阶段先验收再进入下一阶段；长任务使用 `tmux`，长期资产写入 CFS；默认不使用 `--overwrite`。
 
 相关文档：
 
+- [长期复现计划](REPRODUCTION_PLAN.zh-CN.md)
+- [RLT 理论参考](RLT_THEORY_REFERENCE.zh-CN.md)
+- [在线 RL 运行时](rlt_online_rl/README.zh-CN.md)
 - [本地复现报告](LOCAL_REPRODUCTION_REPORT.zh-CN.md)
 - [本地复现教程](LOCAL_REPRODUCTION_TUTORIAL.zh-CN.md)
-- [RLT 理论参考](RLT_THEORY_REFERENCE.zh-CN.md)
-- [长期复现计划](REPRODUCTION_PLAN.zh-CN.md)
 
 ---
 
-## 1. 当前复现边界
+## 1. 当前目标与复现边界
 
-本地已验证：根项目 uv 环境、JAX GPU 识别、10 项轻量 RLT 测试、`rlt_online_rl` 的 43 项单测，以及 ActorService 初始 snapshot 加载和热更新逻辑。
-
-本地尚未完成：完整 Pi0/Pi0.5 模型测试、真实 RLT 数据训练、真实 Machine A 服务、Machine A/B 联调、ManiSkill 在线闭环。本机约 16 GiB 显存不足以稳定完成完整 Pi0 模型初始化测试，因此正式训练应转到云端。
-
----
-
-## 2. 推荐云端资源与拓扑
-
-推荐首选资源：4 GPU、32 CPU 核、128 GiB 内存、32 GiB 共享内存。具体 GPU 型号和每卡显存必须以创建后的 `nvidia-smi` 为准。
-
-初期采用**一台云端开发机、多进程、多 GPU**；Machine A / Machine B 是逻辑角色，不需要两台物理服务器。
+首轮云端工作的目标不是直接复现真实 AgileX Ethernet insertion 成功率，而是完整观察并验收以下链路：
 
 ```text
-GPU 0：Machine A，冻结 Pi0.5 + RLT 推理
-GPU 1：Machine B ActorService 或 LearnerService
-GPU 2：Machine B LearnerService 或 ManiSkill rollout
-GPU 3：评估、数据预处理、额外 rollout 或备用
+云端双 Python 环境
+→ 根项目与在线 RL 测试
+→ fake-data RLT 阶段 1
+→ 公开 Pi0 权重 + 公开 ALOHA 数据
+→ Pi0 + ALOHA RLT checkpoint
+→ Machine A：z_rl + ref_chunk
+→ Machine B：Actor + Learner + Replay
+→ 确定性 fake 环境
+→ ManiSkill 仿真闭环
 ```
 
-第一阶段不应立即占满四卡：先单卡跑环境检查、测试和 `debug_rlt`；确认后再试两卡 FSDP，最后再做四卡正式训练。
+本轮不包含：
+
+- 直接控制真实 AgileX 机器人或启动 ROS 物理执行器；
+- 一开始进行多机或多 GPU 分布式训练；
+- 将 fake 数据、fake 环境或 ManiSkill 结果等同于真实机器人效果；
+- 在未验证数据字段、动作维度和归一化统计前直接训练 Pi0.5/AgileX 配置。
+
+当前 AgileX 配置依赖三路相机、专用 state、32 维模型动作和私有数据约定。第一条公共可复现基线因此选择：
+
+```text
+基础模型：Pi0
+数据：lerobot/aloha_sim_transfer_cube_human
+已有 VLA 配置：pi0_aloha_sim
+预训练权重：gs://openpi-assets/checkpoints/pi0_base/params
+计划新增 RLT 配置：rlt_pi0_aloha、rlt_pi0_aloha_joint
+```
+
+截至 2026-09-07，`rlt_pi0_aloha` 和 `rlt_pi0_aloha_joint` **尚未加入代码**。在完成对应配置实现和测试之前，不应把它们写成已经可运行的训练入口。
 
 ---
 
-## 3. 存储与缓存规划
+## 2. 当前云端开发机快照
 
-系统盘适合代码、uv 环境和少量日志。模型、数据、checkpoint、replay 与缓存必须写入持久化挂载盘。
-
-以下假设持久化盘挂载到 `/mnt/openpi-rlt`；请按实际平台路径替换。
+以下信息于 2026-09-07 通过 `ssh openpi-rlt` 实测：
 
 ```text
-/mnt/openpi-rlt/
-├── datasets/       LeRobot / 自有数据
-├── pretrained/     预训练权重或额外模型
-├── checkpoints/    RLT 阶段 1 checkpoint
+操作系统：Ubuntu 22.04.5 LTS
+CPU：180 logical CPUs
+内存：约 1.8 TiB
+Swap：0
+
+GPU 数量：1
+nvidia-smi 设备名：NVIDIA RPBZZZ6
+显存：97887 MiB，约 98 GiB
+Compute Capability：12.0
+驱动：580.159.04
+
+系统盘：79 GiB，总体可用约 78 GiB
+CFS：20 TiB，总体可用约 8.4 TiB
+
+uv：0.10.12
+系统 python3：3.12.13
+git：未安装
+tmux：未安装
+```
+
+项目目标资源记作百舸云 B300 单卡，但硬件记录和故障报告应保留 `nvidia-smi` 的实际设备字符串，不用项目称呼替代实测值。
+
+远程仓库已经存在：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/repo/openpi-RLT
+```
+
+在未安装 `git` 的情况下，通过 `.git` 元数据确认：
+
+```text
+分支：main
+提交：189a28de2bf90871fe89e92046766005326835b4
+origin：https://github.com/Insanitywoo/openpi-RLT.git
+```
+
+当前尚未创建：
+
+```text
+/root/workspace/openpi-rlt-system/
+/root/workspace/openpi-rlt-system/env.sh
+/root/workspace/openpi-rlt-system/openpi311/.venv
+/root/workspace/openpi-rlt-system/online-rl310/.venv
+```
+
+因此当前状态是“云端资源和 CFS 已准备，运行环境尚未初始化”，不是“已经可以开始训练”。
+
+---
+
+## 3. 系统盘与 CFS 分工
+
+### 3.1 硬规则
+
+系统盘 `/root/workspace` 只保存可重建的运行时：
+
+```text
+/root/workspace/openpi-rlt-system/
+├── env.sh
+├── openpi311/.venv/       # 根 openpi、RLT 阶段 1、Machine A
+└── online-rl310/.venv/    # rlt_online_rl、Machine B
+```
+
+CFS 保存代码和长期资产：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/
+├── repo/openpi-RLT/
+├── datasets/
+├── pretrained/
+├── checkpoints/
+│   ├── rlt_stage1/
+│   └── online_rl/
+├── runs/
+├── replay/
 ├── cache/
 │   ├── huggingface/
-│   └── openpi/
-├── replay/         replay journal
-├── runs/           learner checkpoint 与 actor snapshot
-├── wandb/          W&B 日志
-└── logs/           stdout/stderr 与诊断日志
+│   ├── openpi/
+│   ├── torch/
+│   ├── uv/
+│   └── wandb/
+├── configs/
+├── logs/
+├── reports/
+└── artifacts/
 ```
 
-创建目录及设置通用缓存变量：
+禁止：
+
+- 在 CFS 仓库中创建 `.venv`；
+- 将数据、权重、checkpoint、replay 或长日志放在系统盘；
+- 操作 `/mnt/cfs/usr` 下其他用户的目录；
+- 把 SSH 私钥、Hugging Face token、W&B token 写入仓库。
+
+JAX 编译缓存默认由当前训练代码写入 `~/.cache/jax`。它是可重建的临时编译产物，可以保留在系统盘；不要将“长期缓存必须在 CFS”误解为所有临时文件都必须迁移。
+
+### 3.2 环境变量脚本
+
+在系统盘创建统一脚本：
 
 ```bash
-export OPENPI_ROOT=/mnt/openpi-rlt
-mkdir -p \
-  "$OPENPI_ROOT/datasets" \
-  "$OPENPI_ROOT/pretrained" \
-  "$OPENPI_ROOT/checkpoints" \
-  "$OPENPI_ROOT/cache/huggingface" \
-  "$OPENPI_ROOT/cache/openpi" \
-  "$OPENPI_ROOT/replay" \
-  "$OPENPI_ROOT/runs" \
-  "$OPENPI_ROOT/wandb" \
-  "$OPENPI_ROOT/logs"
+mkdir -p /root/workspace/openpi-rlt-system
 
-export HF_HOME="$OPENPI_ROOT/cache/huggingface"
-export XDG_CACHE_HOME="$OPENPI_ROOT/cache"
-export WANDB_DIR="$OPENPI_ROOT/wandb"
-```
+cat > /root/workspace/openpi-rlt-system/env.sh <<'EOF_ENV'
+export OPENPI_CFS_ROOT=/mnt/cfs/usr/wujh/openpi-RLT
+export OPENPI_REPO="$OPENPI_CFS_ROOT/repo/openpi-RLT"
 
-建议保存为 `~/openpi-rlt-env.sh`：
+export OPENPI311_VENV=/root/workspace/openpi-rlt-system/openpi311/.venv
+export ONLINE_RL310_VENV=/root/workspace/openpi-rlt-system/online-rl310/.venv
 
-```bash
-cat > ~/openpi-rlt-env.sh <<'EOF_ENV'
-export OPENPI_ROOT=/mnt/openpi-rlt
-export HF_HOME="$OPENPI_ROOT/cache/huggingface"
-export XDG_CACHE_HOME="$OPENPI_ROOT/cache"
-export WANDB_DIR="$OPENPI_ROOT/wandb"
+export HF_HOME="$OPENPI_CFS_ROOT/cache/huggingface"
+export OPENPI_DATA_HOME="$OPENPI_CFS_ROOT/cache/openpi"
+export TORCH_HOME="$OPENPI_CFS_ROOT/cache/torch"
+export XDG_CACHE_HOME="$OPENPI_CFS_ROOT/cache"
+export UV_CACHE_DIR="$OPENPI_CFS_ROOT/cache/uv"
+export WANDB_DIR="$OPENPI_CFS_ROOT/cache/wandb"
 EOF_ENV
-source ~/openpi-rlt-env.sh
+
+source /root/workspace/openpi-rlt-system/env.sh
 ```
 
-首次 OpenPI checkpoint 下载后，应检查实际缓存是否位于持久化盘；不要在未确认前盲目删除 `$HOME/.cache/openpi`。
+`OPENPI_DATA_HOME` 是 OpenPI 下载器实际读取的缓存变量；只设置 `XDG_CACHE_HOME` 不会改变 OpenPI 默认的 `~/.cache/openpi`。
 
----
-
-## 4. 为什么先用 uv 而不是 Docker
-
-首轮云端复现推荐直接使用 `uv`，不先构建 Docker：
-
-1. 仓库已经有 `uv.lock`，可锁定 Python 依赖版本；
-2. GPU 驱动来自云端宿主机，容器不能替代对实际驱动/JAX/CUDA 兼容性的验证；
-3. 直接使用 uv 更便于观察每一步、定位 JAX、CUDA、数据或权重问题；
-4. 在训练和服务链路稳定后，再用 Docker 固化已验证环境更合适。
-
-镜像自带 Python 3.12 不构成阻碍：根项目由 uv 创建 Python 3.11 环境；`rlt_online_rl` 由 uv 创建独立 Python 3.10 环境。
-
----
-
-## 5. 阶段 0：云端只读勘测
-
-SSH 登录后先执行：
+验证：
 
 ```bash
-nvidia-smi
-nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+printf 'OPENPI_CFS_ROOT=%s\n' "$OPENPI_CFS_ROOT"
+printf 'OPENPI_REPO=%s\n' "$OPENPI_REPO"
+printf 'OPENPI311_VENV=%s\n' "$OPENPI311_VENV"
+printf 'ONLINE_RL310_VENV=%s\n' "$ONLINE_RL310_VENV"
+printf 'OPENPI_DATA_HOME=%s\n' "$OPENPI_DATA_HOME"
+printf 'UV_CACHE_DIR=%s\n' "$UV_CACHE_DIR"
+```
+
+成功标准：所有路径分别指向约定的 CFS 或系统盘位置，没有出现空值和旧路径 `/mnt/openpi-rlt`。
+
+---
+
+## 4. 阶段 0：基础工具、目录和仓库验收
+
+### 4.1 SSH 登录
+
+从本机进入开发机：
+
+```bash
+ssh openpi-rlt
+```
+
+后续每次新 shell 先执行：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+```
+
+首次尚未创建 `env.sh` 时，先完成第 3.2 节。
+
+### 4.2 安装基础工具
+
+当前系统是 Ubuntu 22.04，包管理器是 `apt-get`。安装会修改系统盘，执行前确认当前开发机允许安装系统包：
+
+```bash
+apt-get update
+apt-get install -y git tmux
+```
+
+验证：
+
+```bash
+git --version
+tmux -V
+uv --version
+```
+
+成功标准：三个命令均正常返回版本。
+
+### 4.3 检查硬件与挂载
+
+```bash
+date -Is
+uname -a
 nproc
 free -h
-df -h
-uname -a
+df -h / /mnt/cfs
+nvidia-smi
+nvidia-smi --query-gpu=name,uuid,memory.total,driver_version,compute_cap --format=csv,noheader
 python3 --version
 uv --version
 ```
 
-验收：记录 GPU 数、每卡显存、驱动、CPU、内存、持久化盘挂载点、Python 与 uv 版本。若 `uv` 不存在，安装 uv 前先确认网络与平台限制。
+系统 `python3` 为 3.12 是正常的；项目不会直接使用它，而是由 uv 准备 Python 3.11 和 3.10。
+
+### 4.4 检查远程仓库
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+
+test -d "$OPENPI_REPO/.git"
+git -C "$OPENPI_REPO" status --short --branch
+git -C "$OPENPI_REPO" rev-parse HEAD
+git -C "$OPENPI_REPO" remote -v
+```
+
+当前参考提交：
+
+```text
+189a28de2bf90871fe89e92046766005326835b4
+```
+
+如果本地已经 push 新提交，再在云端执行：
+
+```bash
+git -C "$OPENPI_REPO" pull --ff-only origin main
+```
+
+若远程目录缺失，才重新 clone：
+
+```bash
+mkdir -p "$OPENPI_CFS_ROOT/repo"
+git clone https://github.com/Insanitywoo/openpi-RLT.git "$OPENPI_REPO"
+```
+
+成功标准：工作区无意外修改，分支为 `main`，远程提交与准备执行的本地提交一致。
 
 ---
 
-## 6. 阶段 1：同步代码和建立两个环境
+## 5. 阶段 1：建立两个系统盘 uv 环境
 
-### 6.1 获取代码
+根项目要求 Python `>=3.11`；`rlt_online_rl` 要求 Python `>=3.10,<3.11`。两套环境不能合并。
 
-本地代码已推送后，在云端执行：
+### 5.1 根 OpenPI/RLT 环境
 
-```bash
-mkdir -p ~/workspace
-cd ~/workspace
-git clone git@github.com:Insanitywoo/openpi-RLT.git
-cd openpi-RLT
-git log -2 --oneline
-```
-
-已有 clone 时：
+安装 uv 管理的 Python 3.11，并在系统盘创建环境：
 
 ```bash
-cd ~/workspace/openpi-RLT
-git pull --ff-only origin main
-```
+source /root/workspace/openpi-rlt-system/env.sh
 
-### 6.2 根 OpenPI/RLT 环境（Python 3.11）
-
-```bash
-cd ~/workspace/openpi-RLT
 uv python install 3.11
-uv venv --python 3.11 .venv
-uv sync --locked
+mkdir -p "$(dirname "$OPENPI311_VENV")"
+uv venv --python 3.11 "$OPENPI311_VENV"
 ```
 
-验证导入和 GPU：
+激活外部环境后，将根项目按锁文件同步进去：
 
 ```bash
-uv run python - <<'PY'
-import sys
-import jax
-import torch
-import openpi
-import openpi_client
+source "$OPENPI311_VENV/bin/activate"
+cd "$OPENPI_REPO"
+uv sync --active --locked
+```
 
-print("Python:", sys.version)
-print("JAX:", jax.__version__)
-print("JAX devices:", jax.devices())
-print("Torch:", torch.__version__)
-print("Torch CUDA:", torch.cuda.is_available())
-print("Torch GPU count:", torch.cuda.device_count())
-for i in range(torch.cuda.device_count()):
-    print(i, torch.cuda.get_device_name(i))
+这里必须使用 `--active`。否则 uv 可能在 CFS 仓库中创建项目 `.venv`，违反存储规则。
+
+验证解释器位置：
+
+```bash
+"$OPENPI311_VENV/bin/python" - <<'PY'
+import sys
+print(sys.executable)
+print(sys.version)
 PY
 ```
 
-成功标准：JAX 和 PyTorch 都能看到分配给开发机的全部 GPU。
+成功标准：解释器位于 `/root/workspace/openpi-rlt-system/openpi311/.venv/`，版本为 Python 3.11。
 
-### 6.3 在线 RL 环境（Python 3.10）
-
-必须与根 `.venv` 隔离：
+### 5.2 在线 RL 环境
 
 ```bash
-cd ~/workspace/openpi-RLT
+source /root/workspace/openpi-rlt-system/env.sh
+
 uv python install 3.10
-uv venv --python 3.10 rlt_online_rl/.venv
+mkdir -p "$(dirname "$ONLINE_RL310_VENV")"
+uv venv --python 3.10 "$ONLINE_RL310_VENV"
+
+cd "$OPENPI_REPO"
 uv pip install \
-  --python rlt_online_rl/.venv/bin/python \
+  --python "$ONLINE_RL310_VENV/bin/python" \
   -e packages/openpi-client \
   -e 'rlt_online_rl[dev]'
 ```
 
----
-
-## 7. 阶段 2：测试验收顺序
-
-### 7.1 在线 RL 单测
+验证：
 
 ```bash
-cd ~/workspace/openpi-RLT
-rlt_online_rl/.venv/bin/python -m pytest -q rlt_online_rl/tests
+"$ONLINE_RL310_VENV/bin/python" - <<'PY'
+import sys
+import jax
+import flax
+import optax
+import rlt_online_rl
+
+print("Python:", sys.executable, sys.version)
+print("JAX:", jax.__version__)
+print("Flax:", flax.__version__)
+print("Optax:", optax.__version__)
+print("rlt_online_rl:", rlt_online_rl.__file__)
+PY
 ```
 
-当前代码的成功标准：
+成功标准：解释器位于 `/root/workspace/openpi-rlt-system/online-rl310/.venv/`，版本为 Python 3.10，所有包可导入。
+
+### 5.3 检查仓库没有云端 `.venv`
+
+```bash
+find "$OPENPI_REPO" -maxdepth 2 -type d -name .venv -print
+```
+
+当前云端规范下应无输出。如果仓库本身从其他机器同步了 `.venv`，不要直接复用；虚拟环境不是可移植资产。
+
+---
+
+## 6. 阶段 2：导入、GPU 和测试验收
+
+建议为每次验收创建独立日志目录：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+export CLOUD_TEST_RUN="cloud-test-$(date +%Y%m%d-%H%M%S)"
+export CLOUD_TEST_LOG_DIR="$OPENPI_CFS_ROOT/logs/tests/$CLOUD_TEST_RUN"
+mkdir -p "$CLOUD_TEST_LOG_DIR"
+printf '%s\n' "$CLOUD_TEST_LOG_DIR"
+```
+
+### 6.1 根环境导入和设备发现
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+"$OPENPI311_VENV/bin/python" - <<'PY'
+import sys
+import jax
+import flax
+import torch
+import openpi
+import openpi_client
+
+print("Python:", sys.executable, sys.version)
+print("JAX:", jax.__version__)
+print("JAX devices:", jax.devices())
+print("Flax:", flax.__version__)
+print("Torch:", torch.__version__)
+print("Torch CUDA:", torch.cuda.is_available())
+print("Torch GPU count:", torch.cuda.device_count())
+for i in range(torch.cuda.device_count()):
+    print("Torch GPU", i, torch.cuda.get_device_name(i), torch.cuda.get_device_capability(i))
+PY
+```
+
+成功标准：
+
+- Python 来自根系统盘环境；
+- JAX 至少返回一个 `CudaDevice`；
+- PyTorch `torch.cuda.is_available()` 为 `True`；
+- GPU 名称和 capability 被完整记录。
+
+如果 PyTorch 只识别设备但运行 CUDA 算子报架构不兼容，应单独记录为 PyTorch wheel/Compute Capability 问题，不要与 JAX 是否可训练混为一谈。
+
+### 6.2 在线 RL 单测
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+
+"$ONLINE_RL310_VENV/bin/python" -m pytest -q rlt_online_rl/tests \
+  2>&1 | tee "$CLOUD_TEST_LOG_DIR/rlt_online_rl_tests.log"
+```
+
+成功标准：无 failed、无 error。提交 `189a28d` 的参考结果是：
 
 ```text
 43 passed
 ```
 
-### 7.2 根项目轻量测试
+测试数量以后可能增加；应以“全部通过”为标准，而不是永久写死 43。
+
+### 6.3 根项目轻量测试
 
 ```bash
-cd ~/workspace/openpi-RLT
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+
 CUDA_VISIBLE_DEVICES=0 \
 XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run pytest -q \
+"$OPENPI311_VENV/bin/python" -m pytest -q \
   src/openpi/transforms_test.py \
   scripts/test_rlt_batch.py \
-  scripts/test_rlt_client.py
+  scripts/test_rlt_client.py \
+  2>&1 | tee "$CLOUD_TEST_LOG_DIR/root_light_tests.log"
 ```
 
-成功标准：
+成功标准：无 failed、无 error。提交 `189a28d` 的参考结果是：
 
 ```text
 10 passed
 ```
 
-### 7.3 完整根项目测试
+### 6.4 完整根项目测试
 
-仅在前两项通过后执行：
-
-```bash
-cd ~/workspace/openpi-RLT
-CUDA_VISIBLE_DEVICES=0 \
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
-uv run pytest -q
-```
-
-完整测试可能下载公开 OpenPI checkpoint 并写入缓存。首次运行较慢是正常现象。若失败，先保存完整 traceback；不要在没有判断根因前反复重装依赖。
-
----
-
-## 8. 阶段 3：RLT 阶段 1 smoke training
-
-先跑仓库内置 fake-data 配置。它验证的不是策略效果，而是：Pi0.5/RLT 模型构建、VLA prefix、RLT 编码/解码、loss、反向传播和 checkpoint。
-
-### 8.1 冻结 VLA 的 RLT smoke test
+完整测试可能下载公开 OpenPI checkpoint，并触发大模型初始化和 JAX 编译。应在前两项通过后，使用 `tmux` 运行：
 
 ```bash
-cd ~/workspace/openpi-RLT
-source ~/openpi-rlt-env.sh
-
-CUDA_VISIBLE_DEVICES=0 \
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run scripts/train_rlt.py debug_rlt \
-  --checkpoint-base-dir /mnt/openpi-rlt/checkpoints \
-  --exp-name cloud-debug-rlt \
-  --overwrite
+tmux new -s openpi-full-pytest
 ```
 
-`debug_rlt` 具有：dummy 模型、fake data、batch size 2、10 step、`rlt_alpha=0`，即冻结 VLA，只训练 RLT module。
-
-验收：完成 10 step，打印 loss，且在下方位置写出 checkpoint：
-
-```text
-/mnt/openpi-rlt/checkpoints/debug_rlt/cloud-debug-rlt/
-```
-
-### 8.2 联合训练 smoke test
+在 tmux 中：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 \
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run scripts/train_rlt.py debug_rlt_joint \
-  --checkpoint-base-dir /mnt/openpi-rlt/checkpoints \
-  --exp-name cloud-debug-rlt-joint \
-  --overwrite
-```
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
 
-区别：`debug_rlt_joint` 设置 `rlt_alpha=1.0`；总损失包含 RLT 重建项和 VLA 训练项，VLA 不再完全冻结。
-
----
-
-## 9. 阶段 4：真实 RLT 数据训练
-
-项目真实 AgileX 配置包括：
-
-```text
-rlt_pi05_agilexbag_image_delta
-rlt_pi05_agilexbag_image_delta_joint
-```
-
-关键参数：
-
-```text
-基础模型：Pi0.5
-动作维度：32
-动作 horizon：50
-数据动作形式：delta joint actions
-RLT：1 个 token、2 层、2048 embedding/input dim
-训练：默认 5000 steps、默认全局 batch size 32、8 data workers
-```
-
-### 9.1 数据前置条件
-
-真实配置读取的 LeRobot 仓库由环境变量控制，默认值只是占位符，必须替换：
-
-```bash
-export AGILEX_LEROBOT_REPO="<你的 Hugging Face LeRobot 数据集 ID>"
-export AGILEX_PI05_BASE_CKPT="gs://openpi-assets/checkpoints/pi05_base/params"
-```
-
-如果数据集私有，还需要按 Hugging Face 的认证方式配置 token。必须先确认数据包含该配置所需的相机、state、32 维动作和动作归一化统计；不匹配时先修数据 adapter / config，不能直接训练。
-
-### 9.2 单卡真实 smoke training
-
-先验证真实数据、基础权重和 checkpoint 结构：
-
-```bash
-cd ~/workspace/openpi-RLT
-source ~/openpi-rlt-env.sh
-
-export AGILEX_LEROBOT_REPO="<真实数据集 ID>"
-export AGILEX_PI05_BASE_CKPT="gs://openpi-assets/checkpoints/pi05_base/params"
+export FULL_TEST_LOG="$OPENPI_CFS_ROOT/logs/tests/full-pytest-$(date +%Y%m%d-%H%M%S).log"
 
 CUDA_VISIBLE_DEVICES=0 \
 XLA_PYTHON_CLIENT_PREALLOCATE=false \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
-uv run scripts/train_rlt.py rlt_pi05_agilexbag_image_delta \
-  --checkpoint-base-dir /mnt/openpi-rlt/checkpoints \
-  --exp-name rlt-delta-smoke \
+"$OPENPI311_VENV/bin/python" -m pytest -q \
+  2>&1 | tee "$FULL_TEST_LOG"
+```
+
+常用 tmux 操作：
+
+```text
+分离：Ctrl-b d
+恢复：tmux attach -t openpi-full-pytest
+```
+
+失败时保存完整 traceback、`nvidia-smi` 和日志路径。不要在未分类根因前反复删除环境或重装全部依赖。
+
+---
+
+## 7. 阶段 3：fake-data RLT smoke training
+
+这一步验证：
+
+```text
+dummy Pi0.5 构建
+→ VLA prefix
+→ RLTokenEncoder / Decoder
+→ reconstruction loss
+→ alpha=0 或 alpha=1 的训练路径
+→ 反向传播
+→ checkpoint 保存与恢复
+```
+
+fake 数据只证明工程链路，不证明表示质量和任务效果。
+
+### 7.1 冻结 VLA：`debug_rlt`
+
+先使用唯一实验名，默认不覆盖已有目录：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+
+export RLT_SMOKE_EXP="cloud-debug-rlt-$(date +%Y%m%d-%H%M%S)"
+export RLT_SMOKE_LOG="$OPENPI_CFS_ROOT/logs/training/$RLT_SMOKE_EXP.log"
+
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+"$OPENPI311_VENV/bin/python" scripts/train_rlt.py debug_rlt \
+  --checkpoint-base-dir "$OPENPI_CFS_ROOT/checkpoints/rlt_stage1" \
+  --exp-name "$RLT_SMOKE_EXP" \
+  --no-overwrite \
+  --no-wandb-enabled \
+  2>&1 | tee "$RLT_SMOKE_LOG"
+```
+
+`debug_rlt` 当前默认：
+
+```text
+fake data
+batch size 2
+10 train steps
+1 个 RLT token
+2 层 RLT
+64 维 dummy embedding
+rlt_alpha=0.0
+```
+
+验收目录：
+
+```text
+$OPENPI_CFS_ROOT/checkpoints/rlt_stage1/debug_rlt/$RLT_SMOKE_EXP/
+```
+
+10-step 运行的最终 checkpoint step 目录通常是 `9/`。检查：
+
+```bash
+find "$OPENPI_CFS_ROOT/checkpoints/rlt_stage1/debug_rlt/$RLT_SMOKE_EXP" \
+  -maxdepth 3 -type f -o -type d | sort
+```
+
+### 7.2 checkpoint 恢复
+
+保留上一节的同一个 `RLT_SMOKE_EXP`，把总步数从 10 提高到 12：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+"$OPENPI311_VENV/bin/python" scripts/train_rlt.py debug_rlt \
+  --checkpoint-base-dir "$OPENPI_CFS_ROOT/checkpoints/rlt_stage1" \
+  --exp-name "$RLT_SMOKE_EXP" \
+  --resume \
+  --no-overwrite \
+  --num-train-steps 12 \
+  --no-wandb-enabled \
+  2>&1 | tee -a "$RLT_SMOKE_LOG"
+```
+
+成功标准：日志明确恢复已有状态，并继续到新增 step，而不是从 0 重新开始。
+
+### 7.3 联合损失：`debug_rlt_joint`
+
+```bash
+export RLT_JOINT_EXP="cloud-debug-rlt-joint-$(date +%Y%m%d-%H%M%S)"
+export RLT_JOINT_LOG="$OPENPI_CFS_ROOT/logs/training/$RLT_JOINT_EXP.log"
+
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+"$OPENPI311_VENV/bin/python" scripts/train_rlt.py debug_rlt_joint \
+  --checkpoint-base-dir "$OPENPI_CFS_ROOT/checkpoints/rlt_stage1" \
+  --exp-name "$RLT_JOINT_EXP" \
+  --no-overwrite \
+  --no-wandb-enabled \
+  2>&1 | tee "$RLT_JOINT_LOG"
+```
+
+`debug_rlt_joint` 使用 `rlt_alpha=1.0`，总损失包含 RLT 重建项和 VLA loss。验收时应看到 `loss`、`rlt_loss`、`mse` 和 `vla_loss`，并确认 checkpoint 可保存。
+
+只有明确决定废弃同名实验目录时才使用 `--overwrite`。删除 checkpoint、覆盖实验或清理日志前应再次确认影响。
+
+---
+
+## 8. 阶段 4：公开 ALOHA 数据和 Pi0 权重验收
+
+已有公共 VLA 配置：
+
+```text
+配置：pi0_aloha_sim
+数据：lerobot/aloha_sim_transfer_cube_human
+权重：gs://openpi-assets/checkpoints/pi0_base/params
+默认 prompt：Transfer cube
+```
+
+在新增 RLT 配置前，先验收：
+
+- Hugging Face 数据下载进入 `$HF_HOME`；
+- OpenPI/GCS 权重下载进入 `$OPENPI_DATA_HOME`；
+- sample keys、dtype、shape 和相机字段符合 `LeRobotAlohaDataConfig`；
+- state/action 维度与 `AlohaInputs`、`AlohaOutputs` 一致；
+- action padding 和坐标转换可解释；
+- norm stats 和 assets 可被定位；
+- 单个 batch 可构建，Pi0 基础权重可加载。
+
+可先运行相关数据与 policy 测试，但应注意 policy 测试可能下载额外 checkpoint：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+"$OPENPI311_VENV/bin/python" -m pytest -q \
+  src/openpi/training/data_loader_test.py \
+  src/openpi/policies/policy_test.py
+```
+
+首次下载前检查：
+
+```bash
+printf 'HF_HOME=%s\n' "$HF_HOME"
+printf 'OPENPI_DATA_HOME=%s\n' "$OPENPI_DATA_HOME"
+du -sh "$HF_HOME" "$OPENPI_DATA_HOME" 2>/dev/null || true
+```
+
+验收失败时先判断是网络、认证、缓存路径、数据 schema、norm stats、权重结构还是 GPU 显存问题，不要直接进入 RLT 正式训练。
+
+---
+
+## 9. 阶段 5：实现 Pi0 + ALOHA RLT 配置
+
+当前代码尚无：
+
+```text
+rlt_pi0_aloha
+rlt_pi0_aloha_joint
+```
+
+下一阶段需要在不破坏 `pi0_aloha_sim` 的前提下增加：
+
+```text
+rlt_pi0_aloha：rlt_alpha=0，只训练 RLT Encoder/Decoder
+rlt_pi0_aloha_joint：rlt_alpha>0，验证联合 VLA loss 路径
+```
+
+配置应复用 `pi0_aloha_sim` 的：
+
+- Pi0 模型和动作规格；
+- `LeRobotAlohaDataConfig`；
+- ALOHA prompt 与输入输出变换；
+- `pi0_base` 权重来源；
+- 数据 assets 和归一化约定。
+
+配置实现后的代码验收至少包括：
+
+```text
+配置名可通过 CLI 解析
+数据 batch 可构建
+RLT input_dim 与 Pi0 prefix hidden size 一致
+alpha=0 时 VLA 参数保持冻结
+alpha>0 时出现 vla_loss
+20-step checkpoint 可保存和恢复
+```
+
+还必须区分“阶段 1 训练接口”和“部署接口”。当前代码的接口事实是：
+
+```text
+AlohaOutputs：输出 14 维双臂动作
+serve_rlt_policy.py：固定 proprio_dim=7、action_dim=7、chunk_len=50
+在线 RL AgileX 配置：action_dim=7、chunk_len=10
+```
+
+因此，Pi0 + ALOHA 可以先用于 RLT 阶段 1 的公共训练基线，但不能在未适配的情况下直接宣称已经接通现有 Machine A/B。进入部署阶段前，需要完成以下之一，并在代码和配置中固定选择：
+
+1. 将 Machine A 输出 contract 参数化，由任务 adapter 明确产生 `z_rl`、`proprio` 和目标环境所需的 `ref_chunk`；
+2. 新增独立的 ALOHA/ManiSkill 部署 adapter，将 14 维 ALOHA 参考动作转换为选定仿真任务的动作空间；
+3. 如果只验证服务加载和 RLT 特征，则明确标记为“Machine A 模型加载 smoke”，不把截断后的前 7 维动作当作有效在线 RL reference。
+
+在这两个训练配置和部署 contract 真正提交并同步到云端前，不执行后续真实 Machine A/B 联调命令。
+
+---
+
+## 10. 阶段 6：Pi0 + ALOHA RLT 训练阶梯
+
+配置实现后，按下列阶梯逐级运行：
+
+```text
+20 steps → 100 steps → 1,000 steps → 5,000 steps
+```
+
+每一级都使用新的实验名，并检查：
+
+- 数据加载和首 batch；
+- 首次 JIT 编译时间；
+- `loss`、`rlt_loss`、`mse`，联合版还包括 `vla_loss`；
+- GPU 峰值显存和利用率；
+- checkpoint 保存和恢复；
+- 日志、权重和缓存全部位于约定目录。
+
+配置完成后的 20-step 命令模板：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+
+export RLT_ALOHA_EXP="rlt-pi0-aloha-smoke20-$(date +%Y%m%d-%H%M%S)"
+export RLT_ALOHA_LOG="$OPENPI_CFS_ROOT/logs/training/$RLT_ALOHA_EXP.log"
+
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
+"$OPENPI311_VENV/bin/python" scripts/train_rlt.py rlt_pi0_aloha \
+  --checkpoint-base-dir "$OPENPI_CFS_ROOT/checkpoints/rlt_stage1" \
+  --exp-name "$RLT_ALOHA_EXP" \
   --num-train-steps 20 \
   --batch-size 1 \
   --num-workers 2 \
-  --wandb-enabled false
+  --no-overwrite \
+  --no-wandb-enabled \
+  2>&1 | tee "$RLT_ALOHA_LOG"
 ```
 
-验收：基础 Pi0.5 权重加载、数据加载、loss 计算、20 step 训练和 checkpoint 保存均成功。
-
-### 9.3 正式单卡和多卡训练
-
-单卡 smoke 后，逐级增加 batch 和训练步数，例如 100、1000、5000 step。不要跳过每一级日志、显存和 checkpoint 检查。
-
-配置支持 `fsdp_devices`。两卡 smoke 示例：
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 \
-XLA_PYTHON_CLIENT_PREALLOCATE=false \
-uv run scripts/train_rlt.py rlt_pi05_agilexbag_image_delta \
-  --checkpoint-base-dir /mnt/openpi-rlt/checkpoints \
-  --exp-name rlt-delta-fsdp2-smoke \
-  --batch-size 4 \
-  --num-train-steps 20 \
-  --fsdp-devices 2 \
-  --wandb-enabled false
-```
-
-只有在 1 卡和 2 卡 smoke 均通过后，才扩大为 4 卡和正式 5000 step；全局 batch size 要根据实测显存和吞吐逐步确定。
+20-step smoke 通过后再逐级提高训练步数和 batch size。当前云端只有一张 GPU，第一轮不设置 `--fsdp-devices 2` 或四卡拓扑。只有单卡基线稳定且有明确显存/吞吐需求时，才规划多 GPU 资源。
 
 ---
 
-## 10. 阶段 5：Machine A 部署
+## 11. 阶段 7：Machine A 与部署 contract 验收
 
-训练 checkpoint 完成后，Machine A 加载冻结 Pi0.5 + RLT，输出 `z_rl` 与 VLA `ref_chunk`。单机初期放在 GPU 0：
+Pi0 + ALOHA RLT checkpoint 完成后，先解决训练数据动作空间、服务输出和在线 RL 输入之间的 contract，不直接启动完整联调。
+
+### 11.1 当前接口差异
+
+截至提交 `189a28d`：
+
+```text
+AlohaOutputs：返回 [T, 14] 双臂动作
+serve_rlt_policy.py：
+  PROPRIO_DIM = 7
+  CHUNK_LEN = 50
+  ACTION_DIM = 7
+  ref_chunk = actions[:50, :7]
+AgileX online RL：期望 [10, 7] ref_chunk
+```
+
+在线 RL 的 feature coercion 会把足够大的 Machine A 输出裁剪到配置的 `[chunk_len, action_dim]`，所以 `[50, 7] → [10, 7]` 在 shape 上可通过；但 ALOHA 14 维动作被取前 7 维是否具有正确任务语义，必须由部署 adapter 明确，不能仅以 shape 可兼容作为验收。
+
+Machine A 的目标 payload 仍是：
+
+```python
+{
+    "z_rl": z_rl,
+    "proprio": proprio,
+    "ref_chunk": ref_chunk,
+}
+```
+
+但 `proprio` 和 `ref_chunk` 的维度、单位、关节顺序、归一化状态和任务语义必须与目标环境配置一致。
+
+### 11.2 服务监听安全前置条件
+
+当前 `scripts/serve_rlt_policy.py` 将 WebSocket host 硬编码为：
+
+```python
+host="0.0.0.0"
+```
+
+CLI 目前只有 `--port`，没有 `--host`。这与项目“初期只监听 `127.0.0.1`”的约定不一致。正式在云端启动前，必须满足至少一项：
+
+- 修改服务入口，增加 `--host`，默认或显式设置为 `127.0.0.1`；
+- 在百舸云安全组/容器网络层确认端口 8000 不可被公网访问，并仅通过本机回环或 SSH tunnel 使用。
+
+推荐后续代码修改采用第一种方式；在修改完成前，不把服务已安全绑定到本机写入实验报告。
+
+### 11.3 分层验收
+
+部署 adapter 完成后，先做模型加载 smoke，再做有效动作 contract 验收。命令模板为：
 
 ```bash
-cd ~/workspace/openpi-RLT
-source ~/openpi-rlt-env.sh
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
 
 CUDA_VISIBLE_DEVICES=0 \
 XLA_PYTHON_CLIENT_PREALLOCATE=false \
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.70 \
-uv run python scripts/serve_rlt_policy.py \
-  --config rlt_pi05_agilexbag_image_delta \
-  --checkpoint-dir /mnt/openpi-rlt/checkpoints/rlt_pi05_agilexbag_image_delta/<exp-name>/<step> \
+"$OPENPI311_VENV/bin/python" scripts/serve_rlt_policy.py \
+  --config rlt_pi0_aloha \
+  --checkpoint-dir "$OPENPI_CFS_ROOT/checkpoints/rlt_stage1/rlt_pi0_aloha/<exp-name>/<step>" \
   --port 8000 \
   --shared-prefix-inference
 ```
 
-`--shared-prefix-inference` 仅复用 VLA prefix/KV cache 以降低推理延迟，不改变模型权重、训练或 online-RL payload。为严格保持旧推理路径，可省略此开关。
+只有在增加 `--host` 后，才在命令中补充：
 
-Machine A 和 B 在同一台云机时，使用：
-
-```text
-ws://127.0.0.1:8000
+```bash
+--host 127.0.0.1
 ```
 
-不建议把 8000、9101、9102 暴露到公网；需要远程调试时应使用 SSH tunnel。
+`--shared-prefix-inference` 只复用 VLA prefix/KV cache，降低推理延迟；不改变模型权重、checkpoint、归一化或 online-RL payload。
+
+验收分为两层：
+
+1. **模型加载 smoke**：checkpoint、assets、单请求、重复请求、batch 请求和 RLT shape 正常；
+2. **部署 contract**：`proprio`、`ref_chunk` 的 shape、dtype、单位、关节顺序、动作语义和在线 RL 配置全部一致。
+
+同时记录启动后常驻显存、首请求编译峰值、缓存命中后的推理延迟、超时和断连行为。只有两层都通过，才能进入真实 Machine A + Machine B 联调。
 
 ---
 
-## 11. 阶段 6：Machine B 部署
+## 12. 阶段 8：Machine B 与 fake 闭环
 
-Machine B 由 `ActorService`、`LearnerService`、`ReplayManager` 构成，使用 Python 3.10 环境。真实 AgileX 配置位于：
+Machine B 使用 Python 3.10 环境，由以下进程组成：
+
+```text
+ReplayManager
+LearnerService
+ActorService
+可选 W&B monitor
+```
+
+真实任务配置位于：
 
 ```text
 rlt_online_rl/configs/tasks/agilex_ethernet/online_rl.yaml
 ```
 
-启动前应复制一份配置到云端实验目录，修改至少以下字段：
+不要直接修改仓库内任务配置。将实验副本写入 CFS：
+
+```text
+$OPENPI_CFS_ROOT/configs/online_rl/<run-name>.yaml
+```
+
+配置中的长期路径必须改到 CFS，例如：
 
 ```yaml
 runtime:
-  env_driver:
-    machine_a_ws_url: ws://127.0.0.1:8000
+  monitoring:
+    wandb_dir: /mnt/cfs/usr/wujh/openpi-RLT/cache/wandb
+
+  actor_service:
+    snapshot_path: /mnt/cfs/usr/wujh/openpi-RLT/runs/online_rl/<run-name>/actor_snapshot/actor_snapshot.pkl
 
   learner_service:
-    checkpoint_dir: /mnt/openpi-rlt/runs/<run-name>/checkpoints
-    actor_snapshot_path: /mnt/openpi-rlt/runs/<run-name>/actor_snapshot/actor_snapshot.pkl
+    checkpoint_dir: /mnt/cfs/usr/wujh/openpi-RLT/runs/online_rl/<run-name>/checkpoints
+    actor_snapshot_path: /mnt/cfs/usr/wujh/openpi-RLT/runs/online_rl/<run-name>/actor_snapshot/actor_snapshot.pkl
 
   replay:
-    journal_path: /mnt/openpi-rlt/replay/<run-name>/replay_journal.pkl
+    journal_path: /mnt/cfs/usr/wujh/openpi-RLT/replay/<run-name>/replay_journal.pkl
+
+  env_driver:
+    machine_a_ws_url: ws://127.0.0.1:8000
 ```
 
-启动：
+第一轮不要直接使用生产预算：
+
+```text
+warmup_min_size: 600
+warmup_post_collect_updates: 20000
+```
+
+应先创建小预算实验副本，验证 RPC、Replay、checkpoint 和 snapshot，再逐步恢复正式值。
+
+Machine B 启动模板：
 
 ```bash
-cd ~/workspace/openpi-RLT/rlt_online_rl
-source .venv/bin/activate
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO/rlt_online_rl"
 
-CUDA_VISIBLE_DEVICES=1 \
-python launch/launch_machine_b.py \
-  --config <云端复制后的 online_rl.yaml>
+CUDA_VISIBLE_DEVICES=0 \
+"$ONLINE_RL310_VENV/bin/python" launch/launch_machine_b.py \
+  --config "$OPENPI_CFS_ROOT/configs/online_rl/<run-name>.yaml"
 ```
 
-真实 AgileX 配置依赖 ROS/机器人接口，因此在 ManiSkill adapter 尚未实现前，不应直接启动真实 rollout。Machine B 可先配合 fake Machine A 或单元测试验证：
+当前只有一张 GPU，不应预先假设 Machine A、Actor 和 Learner 可以按 `0.70 + 0.10 + 0.75` 的内存比例同时常驻。正确顺序：
 
-```bash
-cd ~/workspace/openpi-RLT/rlt_online_rl
-source .venv/bin/activate
-python launch/fake_machine_a.py
+```text
+单独测量 Machine A
+→ 使用 fake Machine A 单独测量 Machine B
+→ 记录各进程常驻和峰值显存
+→ 再决定同卡并发、串行运行或申请第二张 GPU
 ```
+
+fake 验收顺序：
+
+```text
+在线 RL 单测
+→ fake Machine A
+→ 确定性 DummyChunkEnv
+→ Replay 增长
+→ Learner global_step 增长
+→ actor snapshot 生成
+→ Actor version 热更新
+→ 服务重启恢复
+```
+
+真实 AgileX rollout 依赖 ROS 和机器人接口。在 ManiSkill adapter 完成前，不启动真实机器人 rollout。
 
 ---
 
-## 12. 推荐验收顺序
+## 13. 阶段 9：ManiSkill 与后续扩展
 
-```text
-1. 云端硬件、磁盘和 uv 勘测
-2. 根 Python 3.11 环境
-3. 在线 RL Python 3.10 环境
-4. 43 项在线 RL 单测
-5. 10 项根项目轻量测试
-6. 完整根项目 pytest
-7. debug_rlt（10 step）
-8. debug_rlt_joint（10 step）
-9. 真实数据单卡 20 step smoke
-10. 单卡 100 / 1000 step
-11. 两卡 FSDP 20 step smoke
-12. 四卡正式 RLT 训练
-13. Machine A 推理服务
-14. fake Machine A + Machine B 联调
-15. ManiSkill adapter 与在线 RL 仿真闭环
+ManiSkill adapter 应作为独立仿真适配层，不破坏 ROS/AgileX 路径。最小接口：
+
+```python
+reset() -> observation
+step(action) -> next_observation, reward, terminated, truncated, info
+execute_chunk(action_chunk) -> execution_result
 ```
 
-每一层通过后再进入下一层；失败时保留命令、完整日志、GPU 状态和 checkpoint 路径以便定位。
+接入顺序：
+
+```text
+adapter 单测
+→ reference-only baseline
+→ fake Machine A + ManiSkill
+→ 真实 Machine A + ManiSkill
+→ warmup / replay / learner / snapshot
+→ evaluation
+```
+
+至少记录：
+
+```text
+episode reward
+success rate
+episode length
+action delta magnitude
+BC penalty
+Q value
+actor loss
+critic loss
+fallback 次数
+```
+
+只有单卡训练、Machine A、Machine B 和 ManiSkill 闭环稳定后，才考虑：
+
+- 多 GPU/FSDP；
+- 将 Machine A 与 Learner 分卡；
+- Docker 固化环境；
+- Pi0.5/AgileX 专有数据；
+- ROS2 Humble 和真实机器人。
+
+---
+
+## 14. 推荐验收顺序与当前进度
+
+### 14.1 当前已完成
+
+```text
+[完成] 本机双环境和轻量软件验证
+[完成] SSH 别名 openpi-rlt
+[完成] 云端 GPU、CPU、内存、系统盘和 CFS 勘测
+[完成] CFS 个人目录架构
+[完成] 云端仓库存在，提交为 189a28d
+[完成] 云端 uv 可用
+```
+
+### 14.2 当前下一步
+
+```text
+[待执行] 安装 git 和 tmux
+[待执行] 创建 /root/workspace/openpi-rlt-system/env.sh
+[待执行] 创建系统盘 Python 3.11 根环境
+[待执行] 创建系统盘 Python 3.10 在线 RL 环境
+[待执行] 云端导入、GPU 与测试验收
+```
+
+### 14.3 后续阶段
+
+```text
+1. debug_rlt 及恢复测试
+2. debug_rlt_joint
+3. 公开 ALOHA 数据和 Pi0 权重验收
+4. 实现 rlt_pi0_aloha / rlt_pi0_aloha_joint
+5. 20-step Pi0 + ALOHA RLT smoke
+6. 100 / 1,000 / 5,000-step 训练
+7. Machine A 单独验收
+8. fake Machine A + Machine B
+9. 确定性 fake 环境闭环
+10. ManiSkill adapter 与在线 RL 仿真闭环
+11. 按实测需求规划多 GPU、Pi0.5/AgileX 和真实机器人
+```
+
+每一阶段通过后再进入下一阶段。失败时保留：
+
+```text
+Git commit
+完整命令
+环境变量摘要
+Python/JAX/PyTorch/uv 版本
+nvidia-smi
+完整日志路径
+数据/权重/checkpoint 路径
+错误 traceback
+```
+
+故障应先分类为环境、网络、依赖、CUDA/JAX、显存、数据 schema、checkpoint、RPC 或算法数值问题，再决定下一步，不以“重装全部依赖”作为默认排障方式。
