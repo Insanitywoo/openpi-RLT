@@ -93,16 +93,22 @@ tmux：未安装
 origin：https://github.com/Insanitywoo/openpi-RLT.git
 ```
 
-当前尚未创建：
+已经创建：
 
 ```text
-/root/workspace/openpi-rlt-system/
 /root/workspace/openpi-rlt-system/env.sh
 /root/workspace/openpi-rlt-system/openpi311/.venv
 /root/workspace/openpi-rlt-system/online-rl310/.venv
 ```
 
-因此当前状态是“云端资源和 CFS 已准备，运行环境尚未初始化”，不是“已经可以开始训练”。
+uv 管理的 Python 解释器位于系统盘：
+
+```text
+/root/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/
+/root/.local/share/uv/python/cpython-3.10.20-linux-x86_64-gnu/
+```
+
+当前状态是“云端 Git 快照、路径脚本和两个空的 Python 虚拟环境已准备；项目依赖、GPU Python 导入和训练尚未验收”，不是“已经可以开始训练”。
 
 ---
 
@@ -152,7 +158,109 @@ CFS 保存代码和长期资产：
 
 JAX 编译缓存默认由当前训练代码写入 `~/.cache/jax`。它是可重建的临时编译产物，可以保留在系统盘；不要将“长期缓存必须在 CFS”误解为所有临时文件都必须迁移。
 
-### 3.2 环境变量脚本
+### 3.2 网络边界与本地资产传输策略
+
+截至 2026-09-07，云端网络实测结果为：
+
+```text
+可访问：Ubuntu 百度镜像、PyPI、files.pythonhosted.org、Google Storage、Astral/uv
+超时：GitHub HTTPS、Hugging Face HTTPS
+```
+
+因此不要把“云端可以访问 PyPI”误解为“云端可以访问所有依赖和数据源”。后续按以下分工执行：
+
+```text
+本地：代码修改、Git 提交、Git bundle、wheelhouse、源码归档、模型和数据准备
+云端：创建本地 Python 环境、安装/导入依赖、GPU 验收、测试、训练、服务和实验记录
+```
+
+不同资产使用不同传输方式：
+
+| 资产 | 推荐方式 | 说明 |
+| --- | --- | --- |
+| Git commit/branch/tag | Git bundle | 只传 Git 对象和历史，不包含普通未跟踪大文件 |
+| 普通源码快照 | `scp` / `rsync` | 适合非 Git 文件或离线补丁 |
+| Python wheel | 云端 PyPI 直装；缺失项才用本地 `wheelhouse` | 不默认打包完整环境；离线项用 `--no-index --find-links` |
+| GitHub 依赖源码 | 云端 Git mirror 或本地源码归档 | 当前 `lerobot` mirror 已存在于 CFS |
+| 模型权重和数据集 | `rsync`、`tar` 或 `tar.zst` | 直接放 CFS 的 `pretrained/`、`datasets/` |
+| checkpoint/replay/日志 | 云端直接写 CFS | 不进入 Git，不放系统盘 |
+| `.venv`/`site-packages` | 不传输 | 云端重新创建，避免绝对路径和 CUDA/编译兼容问题 |
+
+Git bundle 只用于代码历史。不要把模型、数据、虚拟环境或 wheelhouse 塞进 Git bundle。
+
+当前 CFS 已有 LeRobot mirror：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/cache/git-mirrors/lerobot.git
+```
+
+项目锁定的 LeRobot revision 已存在：
+
+```text
+0cf864870cf29f4738d3ade893e6fd13fbd7cdb5
+```
+
+后续根环境安装采用混合策略：
+
+1. PyPI 和 `files.pythonhosted.org` 可达，锁定的普通 wheel 在云端直接下载；
+2. 默认依赖中唯一必须访问 GitHub 的包是 `lerobot`，优先重定向到上述 CFS mirror；
+3. `dlimp` 也是 GitHub 依赖，但只属于可选的 `rlds` dependency group，首轮不安装；
+4. 只有具体 wheel 在云端无法获取时，才在本地制作该包或该小组依赖的 wheelhouse；
+5. 不默认打包全部 241 个包，因为 PyTorch/CUDA wheel 体积大，上传完整 wheelhouse 往往比云端直连 PyPI 更慢。
+
+如果某个 Git 依赖仍无法解析，再由本地准备源码归档或 wheel。不要在没有网络诊断的情况下反复执行 `uv sync`。
+
+### 3.3 环境解释与云端职责
+
+系统自带 Python 是：
+
+```text
+/usr/bin/python3
+/usr/bin/python3.12
+```
+
+它由 Ubuntu 系统管理，不作为本项目默认运行时。`uv python install 3.11` 和 `uv python install 3.10` 使用 uv 管理的 Python，当前安装在：
+
+```text
+/root/.local/share/uv/python/
+```
+
+`uv venv` 再在系统盘创建项目环境：
+
+```text
+/root/workspace/openpi-rlt-system/openpi311/.venv
+/root/workspace/openpi-rlt-system/online-rl310/.venv
+```
+
+`uv` 的下载缓存通过 `UV_CACHE_DIR` 放在 CFS；Python 解释器和虚拟环境放在系统盘。`/root/.local/bin is not on PATH` 的警告不会影响后续使用绝对路径调用虚拟环境解释器。
+
+项目依赖不应依赖系统 Python 的预装库。Ubuntu apt 主要负责系统库和工具，PyPI/源码/wheelhouse 负责 Python 项目依赖。云端必须重新创建虚拟环境并进行 GPU/CUDA/JAX/PyTorch 验收，但不上传本地 `.venv` 代替这一过程。
+
+当前云端 apt 软件源包括：
+
+```text
+百度 Ubuntu 22.04 Jammy 镜像
+NVIDIA CUDA Ubuntu 22.04 软件源
+deadsnakes PPA
+```
+
+当前云端已有的相关工具包括：
+
+```text
+gcc、g++、make、cmake、ninja、rsync、tar、ffmpeg、nvcc、nvidia-smi、git、tmux、uv
+```
+
+`nvcc` 路径存在，但本轮只读检查没有获得有效版本输出；这不能作为 CUDA Toolkit 完整可用的证据。后续以 JAX/PyTorch 实际加载 GPU 和执行最小算子为准。
+
+当前尚未发现但以后按实际错误再安装：
+
+```text
+pkg-config、git-lfs、wget、zstd
+```
+
+不要为了“可能需要”提前安装整套系统包或执行 `apt upgrade`。
+
+### 3.4 环境变量脚本
 
 在系统盘创建统一脚本：
 
@@ -210,7 +318,7 @@ ssh openpi-rlt
 source /root/workspace/openpi-rlt-system/env.sh
 ```
 
-首次尚未创建 `env.sh` 时，先完成第 3.2 节。
+首次尚未创建 `env.sh` 时，先完成第 3.4 节。
 
 ### 4.2 安装基础工具
 
@@ -362,6 +470,32 @@ find "$OPENPI_REPO" -maxdepth 2 -type d -name .venv -print
 ```
 
 当前云端规范下应无输出。如果仓库本身从其他机器同步了 `.venv`，不要直接复用；虚拟环境不是可移植资产。
+
+---
+
+### 5.4 依赖安装前的资产准备关卡
+
+两个虚拟环境已经创建，但当前不要直接运行会等待 GitHub 超时的 `uv sync`。依赖来源固定为：
+
+1. 普通 Python wheel：云端从可访问的 PyPI/`files.pythonhosted.org` 按 `uv.lock` 下载；
+2. `lerobot`：使用 CFS 中已有且包含锁定 revision 的 bare Git mirror；
+3. `dlimp`：首轮不启用 `rlds` group，因此暂不处理；
+4. Hugging Face 数据：本地下载后用 `rsync`/归档上传到 CFS，或后续使用平台对象存储；
+5. OpenPI GCS 权重：优先由云端直接下载到 `$OPENPI_DATA_HOME`；
+6. 只有明确失败的包才制作小范围 wheelhouse，不默认传输整个本地 Python 环境。
+
+安装完成后仍必须在云端验证 Python、JAX、PyTorch、CUDA 和项目测试。
+
+不要复制本地 `.venv`，不要把 wheelhouse、模型或数据写入 Git。默认资产暂存目录为：
+
+```text
+本地临时目录：/tmp/openpi-rlt-transfer/<commit>/
+云端 CFS：/mnt/cfs/usr/wujh/openpi-RLT/artifacts/<commit>/
+云端 wheelhouse：/mnt/cfs/usr/wujh/openpi-RLT/artifacts/python-wheelhouse/<commit>/
+云端源码归档：/mnt/cfs/usr/wujh/openpi-RLT/artifacts/source/<commit>/
+```
+
+本关卡完成前，根环境和在线 RL 环境只保持空环境状态。
 
 ---
 
@@ -967,9 +1101,12 @@ fallback 次数
 
 ```text
 [待执行] 安装 git 和 tmux
-[待执行] 创建 /root/workspace/openpi-rlt-system/env.sh
-[待执行] 创建系统盘 Python 3.11 根环境
-[待执行] 创建系统盘 Python 3.10 在线 RL 环境
+[完成] 创建 /root/workspace/openpi-rlt-system/env.sh
+[完成] 安装 uv 管理的 Python 3.11.15 和 3.10.20
+[完成] 创建系统盘 Python 3.11 根环境
+[完成] 创建系统盘 Python 3.10 在线 RL 环境
+[待执行] 本地依赖 wheelhouse/源码资产准备
+[待执行] 云端依赖安装与 Git mirror 配置
 [待执行] 云端导入、GPU 与测试验收
 ```
 

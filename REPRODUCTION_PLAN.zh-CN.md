@@ -95,6 +95,34 @@ CFS 保存全部长期资产：
 
 当前 AgileX 配置固定了三路相机、32 维模型动作、专用状态和专用数据字段，不能直接与 ALOHA 数据混用。因此第一轮先使用 Pi0 + ALOHA 建立可复现基线，第二轮再迁移到 Pi0.5/AgileX。
 
+### 2.4 网络受限环境下的资产分工
+
+2026-09-07 云端实测：PyPI、`files.pythonhosted.org`、Google Storage 和 Astral/uv 可访问；GitHub HTTPS 与 Hugging Face HTTPS 超时。由此采用分层传输策略：
+
+```text
+本地：代码修改、Git bundle、wheelhouse、源码归档、模型和数据准备
+云端：创建系统盘虚拟环境、安装/导入依赖、GPU 验收、测试、训练和实验运行
+```
+
+资产传输规则：
+
+- Git 历史使用 Git bundle；
+- 普通 PyPI wheel 由云端直接下载，只有失败包才在本地制作小范围 wheelhouse；
+- 默认 GitHub 依赖 `lerobot` 使用 CFS 本地 Git mirror；可选 `rlds` group 的 `dlimp` 首轮不安装；
+- Hugging Face 数据由本地下载后通过 `rsync`/归档上传，或后续使用平台对象存储；
+- OpenPI GCS 权重优先由云端直接下载；
+- 模型、数据、checkpoint、replay 和日志使用 CFS 目录，不进入 Git；
+- 不上传本地 `.venv` 或 `site-packages`，云端必须重新创建环境并验证 CUDA/JAX/PyTorch；
+- 依赖安装前先判断来源，不对无法访问 GitHub/Hugging Face 的命令反复重试。
+
+当前已经存在的 LeRobot mirror：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/cache/git-mirrors/lerobot.git
+```
+
+锁定 revision `0cf864870cf29f4738d3ade893e6fd13fbd7cdb5` 已存在，后续优先复用。
+
 ## 3. 算法链路
 
 ### 3.1 RLT 阶段一
@@ -173,14 +201,15 @@ VLA reference warmup
 
 验收：CFS repo 可写、系统盘空间充足、实际 GPU 可见、代码提交可确认、环境路径符合系统盘/CFS 分工。
 
-### 阶段 1：两个 uv 环境
+### 阶段 1：两个 uv 环境和依赖资产
 
 1. 用 Python 3.11 创建根环境；
 2. 用 Python 3.10 创建在线 RL 环境；
-3. 根项目按 `uv.lock` 同步；
-4. 在线 RL 按其 `pyproject.toml` 安装；
-5. 将 Hugging Face、W&B、uv 下载缓存指向 CFS；
-6. 严格验证两个解释器和包导入。
+3. 将 Hugging Face、W&B、uv 下载缓存指向 CFS；
+4. 先检查 PyPI、GitHub、Hugging Face 的可达性；
+5. 根项目优先使用 PyPI + CFS Git mirror，受限依赖使用本地 wheelhouse/源码归档；
+6. 不复制本地 `.venv`，不把模型、数据和 wheelhouse 放入 Git；
+7. 安装完成后严格验证两个解释器、包导入和 GPU 后端。
 
 验收：
 
@@ -372,23 +401,31 @@ CFS 个人目录架构
 云端当前尚未完成：
 
 ```text
-git、tmux 安装
-/root/workspace/openpi-rlt-system/env.sh
-/root/workspace/openpi-rlt-system/openpi311/.venv
-/root/workspace/openpi-rlt-system/online-rl310/.venv
 根项目和在线 RL 依赖安装
+本地 wheelhouse/源码归档准备
+云端 Git mirror/离线依赖安装验证
 云端 JAX/PyTorch GPU 验收
 云端测试和训练
+```
+
+云端当前已经完成：
+
+```text
+git、tmux 安装
+/root/workspace/openpi-rlt-system/env.sh
+uv 管理的 Python 3.11.15 和 3.10.20
+/root/workspace/openpi-rlt-system/openpi311/.venv
+/root/workspace/openpi-rlt-system/online-rl310/.venv
 ```
 
 当前下一步按顺序执行：
 
 ```text
-安装 git、tmux
-→ 创建并加载系统盘 env.sh
-→ 用 git 验证现有 CFS 仓库和本地提交一致
-→ 创建两个系统盘 uv 环境
+将 lerobot Git URL 定向到 CFS mirror
+→ 在 tmux 中按 uv.lock 从云端可达的 PyPI 安装普通依赖
+→ 只对明确失败的依赖制作小范围 wheelhouse/源码归档
 → 运行导入、GPU 和测试验收
+→ 本地准备并上传 Hugging Face ALOHA 数据
 ```
 
 完整的可复制命令、路径和成功判据见
