@@ -235,6 +235,8 @@ cd openpi-RLT/rlt_online_rl
 python launch/fake_machine_a.py
 ```
 
+纯软件闭环还可使用 `rlt_online_rl.fake_env:DeterministicChunkEnv`。该环境不导入 ROS、不连接机器人；它消费 Actor 输出的动作块并生成确定性的 observation、reward、done 与 EnvDriver step trace。启动时必须将 `local_debug_mode` 设为 `false`，这样 EnvDriver 才会经 WebSocket 调用 fake Machine A，而不是使用内置 `DummyFeatureProvider`。
+
 启动机器人 rollout：
 
 ```bash

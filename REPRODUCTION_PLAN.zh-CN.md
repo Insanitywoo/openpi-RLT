@@ -411,7 +411,7 @@ CFS 个人目录架构
 | 阶段 4：公开 ALOHA 数据和 Pi0 权重 | **未开始** | 先准备/传输资产，再审计 sample schema、动作维度、norm stats 与缓存路径。 |
 | 阶段 5：Pi0 + ALOHA RLT 配置 | **未开始** | 依赖阶段 4；按 `20 → 100 → 1,000 → 5,000` steps 递进。 |
 | 阶段 6：Machine A 与部署 contract | **未开始** | 先解决 14 维 ALOHA 与 7 维 Online RL action contract，以及仅本机监听。 |
-| 阶段 7：fake Machine A + fake 环境 | **未开始** | 不依赖真实模型/数据，可先验证 Actor/Replay/Learner/snapshot 闭环。 |
+| 阶段 7：fake Machine A + fake 环境 | **进行中** | 已新增确定性 fake EnvDriver 环境并完成单测；下一步在云端启动服务闭环，验证 Replay/Learner/snapshot。 |
 | 阶段 8：Machine B 多进程 | **未开始** | 依赖阶段 7 的确定性闭环。 |
 | 阶段 9：ManiSkill adapter | **未开始** | 先单独适配稳定单臂 7 维任务，再接 fake Machine A。 |
 | 阶段 10：仿真 Online RL 对照实验 | **未开始** | 依赖阶段 8、9。 |
@@ -427,6 +427,7 @@ CFS 个人目录架构
 [完成] Online RL JAX GPU 矩阵乘法和 43 项测试
 [完成] CFS 日志、checkpoint、离线 wheelhouse/归档与 Git bundle 同步流程
 [完成] 根项目 uv.lock 与 Online RL uv.lock 可校验
+[完成] 确定性 fake 环境实现与 46 项 Online RL 本地测试
 ```
 
 核心证据目录：
