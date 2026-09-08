@@ -437,13 +437,28 @@ uv 管理的 Python 3.11.15 和 3.10.20
 
 包装器和恢复规则见 `CLOUD_DEPLOYMENT_GUIDE.zh-CN.md` 第 15 节。不要对已验收环境直接执行普通 `uv sync --active --locked`，避免重写 CUDA 运行时。
 
-当前下一阶段按顺序执行：
+截至 2026-09-08，Online RL Python 3.10 环境也已完成云端准备与验收：
 
 ```text
-Python 3.10 online RL 环境离线/镜像依赖准备
-→ rlt_online_rl 全部单测
-→ fake Machine A + Machine B / 确定性 fake 环境闭环
+[完成] 独立 Python 3.10.20 环境
+[完成] JAX 0.5.3 / Flax / Optax / OpenCV 等依赖
+[完成] JAX GPU 实际算子验证
+[完成] rlt_online_rl 全部单测：43 passed
+[完成] CFS 测试日志与离线恢复资产
+```
+
+Online RL 命令使用系统盘包装器：
+
+```text
+/root/workspace/openpi-rlt-system/run-online-rl.sh
+```
+
+详见 `CLOUD_DEPLOYMENT_GUIDE.zh-CN.md` 第 16 节。当前继续按顺序执行：
+
+```text
+fake Machine A + Machine B / 确定性 fake 环境闭环
 → 再准备公开 ALOHA 数据与 Pi0 权重
+→ 20-step Pi0 + ALOHA RLT smoke
 ```
 
 完整的可复制命令、路径和成功判据见

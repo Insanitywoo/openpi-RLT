@@ -1249,3 +1249,55 @@ uv sync --active --locked
 ```
 
 这表示 RLT 阶段 1 的**软件、GPU、训练、恢复与持久化链路**已就绪；尚未下载真实 ALOHA/Hugging Face 数据或 Pi0 权重，也尚未开始正式训练。下一独立阶段是 Python 3.10 `rlt_online_rl` 环境和在线 RL 单测。
+
+## 16. 2026-09-08：Online RL Python 3.10 环境已验证
+
+Online RL 使用独立环境，不与根 OpenPI/RLT 的 Python 3.11 环境混用：
+
+```text
+解释器：/root/workspace/openpi-rlt-system/online-rl310/.venv/bin/python
+Python：3.10.20
+JAX：0.5.3
+Flax：0.10.2
+Optax：0.2.8
+NumPy：1.26.4
+OpenCV：4.11.0
+```
+
+由于云端直接下载 JAX CUDA 依赖长时间停滞，本次使用本地已验证的 Python 3.10 `site-packages` 离线归档传输到 CFS；CUDA vendor 动态库不重复传输，复用系统盘上的 JAX 私有运行时：
+
+```text
+归档：/mnt/cfs/usr/wujh/openpi-RLT/tmp/online-rl310-site-packages.tar.gz
+JAX CUDA：/root/workspace/openpi-rlt-system/jax053-cuda-libs/nvidia
+```
+
+Online RL 命令统一使用：
+
+```text
+/root/workspace/openpi-rlt-system/run-online-rl.sh
+```
+
+该包装器加载 JAX 私有 CUDA 动态库后执行传入命令。例如：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+/root/workspace/openpi-rlt-system/run-online-rl.sh \
+  "$ONLINE_RL310_VENV/bin/python" -m pytest -q rlt_online_rl/tests
+```
+
+2026 年 9 月 8 日已完成：
+
+```text
+JAX GPU matmul：通过
+rlt_online_rl 全部单测：43 passed
+退出码：0
+```
+
+测试日志：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/logs/tests/online-rl310-20260908.log
+```
+
+测试有一个非阻断警告：当前 pytest 版本提示 `exclude-dependencies` 是未知配置项；不影响 43 个测试通过。Online RL 环境已具备单测和后续 fake Machine B 开发所需的 Python 依赖，但尚未启动在线 RL、Machine A/B、机器人、ROS 或正式训练。
