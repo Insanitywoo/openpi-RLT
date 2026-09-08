@@ -1037,6 +1037,31 @@ fake 验收顺序：
 
 真实 AgileX rollout 依赖 ROS 和机器人接口。在 ManiSkill adapter 完成前，不启动真实机器人 rollout。
 
+### 12.1 2026-09-08 云端 bounded fake 闭环结果
+
+本节记录一次硬件无关、有限预算的完整验收；它不使用 ROS、真实机器人、公开 ALOHA 数据或 Pi0 权重。配置与运行资产均在 CFS：
+
+```text
+配置：/mnt/cfs/usr/wujh/openpi-RLT/configs/online_rl/fake-machine-a-smoke-20260908-final.yaml
+运行目录：/mnt/cfs/usr/wujh/openpi-RLT/runs/online_rl/fake-machine-a-smoke-20260908-final/
+最终单测日志：/mnt/cfs/usr/wujh/openpi-RLT/logs/tests/online-rl310-fake-smoke-final-20260908.log
+```
+
+验收结果：
+
+```text
+Online RL 单测：47 passed
+服务监听：fake Machine A / Actor / Replay 均为 127.0.0.1
+warmup rollout：2 episodes，12 条 replay transition
+Learner：global_step=2，Actor version=2，随后按 freeze_after_warmup 停止更新
+Actor：actor_snapshot.pkl、actor_v000001.pkl、actor_v000002.pkl 均生成
+Learner：latest.pkl 与 step_2.pkl 均生成
+post-update rollout：第 3 个 episode 使用 Actor version=2，无 fallback、无 drop
+重启恢复：Replay 保持 18 条，Actor version=2，Learner 从 global_step=2 恢复
+```
+
+fake Machine A 同时提供 WebSocket、`GET /healthz` 和 batch feature response；这三项是 `MachineAFeatureClient` 能完成就绪探测、逐请求和 replay feature prefetch 的必要协议。测试完成后已停止所有 fake 服务，并确认端口 `8000`、`9201`、`9202` 关闭。
+
 ---
 
 ## 13. 阶段 9：ManiSkill 与后续扩展
@@ -1100,14 +1125,13 @@ fallback 次数
 ### 14.2 当前下一步
 
 ```text
-[待执行] 安装 git 和 tmux
-[完成] 创建 /root/workspace/openpi-rlt-system/env.sh
-[完成] 安装 uv 管理的 Python 3.11.15 和 3.10.20
-[完成] 创建系统盘 Python 3.11 根环境
-[完成] 创建系统盘 Python 3.10 在线 RL 环境
-[待执行] 本地依赖 wheelhouse/源码资产准备
-[待执行] 云端依赖安装与 Git mirror 配置
-[待执行] 云端导入、GPU 与测试验收
+[完成] 安装 git 和 tmux，创建 env.sh 与双 Python 环境
+[完成] 根 RLT 与 Online RL 依赖资产、Git mirror 和 GPU 测试验收
+[完成] fake-data RLT smoke、checkpoint 保存/恢复
+[完成] fake Machine A + Machine B + 确定性 fake 环境 bounded 闭环
+[下一步] 准备公开 ALOHA 数据与 Pi0 权重资产，并先审计数据/动作 contract
+[未开始] Pi0 + ALOHA RLT 配置与递进训练
+[未开始] 真实 Machine A、ManiSkill 和真实机器人阶段
 ```
 
 ### 14.3 后续阶段

@@ -2,7 +2,7 @@
 
 > **版本：** v2（Pi0 + ALOHA + fake 环境 + ManiSkill）
 > **状态：** 已确定路线，按阶段交互式执行
-> **最后更新：** 2026-09-07
+> **最后更新：** 2026-09-08
 > **执行原则：** 助手每次只讲一个小步骤；先解释目标、原理、命令、预期输出和故障，再由用户亲自执行并反馈。除非用户明确要求自动执行，否则不自动安装依赖、下载大文件、修改训练配置或启动长任务。
 
 ## 1. 本轮目标与边界
@@ -316,6 +316,8 @@ observation
 
 验收：Replay 增长、Learner `global_step` 增长、Actor version 增长、snapshot 生成、服务重启可恢复。
 
+**2026-09-08 云端完成记录：** 使用仅监听 `127.0.0.1` 的 fake Machine A、确定性 7 维环境和小预算配置完成三进程 Machine B 闭环。两个 warmup episode 写入 12 条 transition，Learner 完成 2 次更新并产生 Actor `v1/v2` snapshot 与 `step_2` checkpoint；第三个 post-update episode 确认 Actor 已热加载 version 2。停止并重启四个服务后，Replay 恢复到 18 条、Actor version 保持 2、Learner 从 `global_step=2` 的 checkpoint 恢复且保持冻结。该结果只证明软件/RPC/持久化链路，不代表真实任务的算法效果。
+
 ### 阶段 8：Machine B
 
 在同一台 B300 上以多进程运行：
@@ -406,12 +408,12 @@ CFS 个人目录架构
 |---|---|---|
 | 阶段 0：云端基础环境 | **完成** | SSH、git、tmux、CFS 目录、系统盘/CFS 分工、GPU 与磁盘检查完成。 |
 | 阶段 1：双环境与依赖资产 | **完成** | 根 Python 3.11 与 Online RL Python 3.10 分离；Git mirror、PyTorch wheelhouse、JAX 私有 CUDA runtime、Online RL 离线归档均已准备。 |
-| 阶段 2：已有测试与 GPU 验证 | **部分完成** | 根环境的 JAX/PyTorch GPU 实算通过；Online RL `43 passed`；完整根项目测试尚未运行，不能标记完成。 |
+| 阶段 2：已有测试与 GPU 验证 | **部分完成** | 根环境的 JAX/PyTorch GPU 实算通过；Online RL `47 passed`；完整根项目测试尚未运行，不能标记完成。 |
 | 阶段 3：fake RLT smoke | **完成** | `debug_rlt`、checkpoint 恢复、`debug_rlt_joint` 均通过并写入 CFS。 |
 | 阶段 4：公开 ALOHA 数据和 Pi0 权重 | **未开始** | 先准备/传输资产，再审计 sample schema、动作维度、norm stats 与缓存路径。 |
 | 阶段 5：Pi0 + ALOHA RLT 配置 | **未开始** | 依赖阶段 4；按 `20 → 100 → 1,000 → 5,000` steps 递进。 |
 | 阶段 6：Machine A 与部署 contract | **未开始** | 先解决 14 维 ALOHA 与 7 维 Online RL action contract，以及仅本机监听。 |
-| 阶段 7：fake Machine A + fake 环境 | **进行中** | 已新增确定性 fake EnvDriver 环境并完成单测；下一步在云端启动服务闭环，验证 Replay/Learner/snapshot。 |
+| 阶段 7：fake Machine A + fake 环境 | **完成** | 云端 bounded smoke 已验证 fake Machine A、Actor、Replay、Learner、热加载、checkpoint/replay 恢复与持久化工件。 |
 | 阶段 8：Machine B 多进程 | **未开始** | 依赖阶段 7 的确定性闭环。 |
 | 阶段 9：ManiSkill adapter | **未开始** | 先单独适配稳定单臂 7 维任务，再接 fake Machine A。 |
 | 阶段 10：仿真 Online RL 对照实验 | **未开始** | 依赖阶段 8、9。 |
@@ -424,17 +426,21 @@ CFS 个人目录架构
 [完成] sm_120 上 JAX 与 PyTorch 的实际 GPU 矩阵乘法
 [完成] RLT fake-data 训练、checkpoint 保存/恢复、联合损失路径
 [完成] 云端 Online RL 环境：Python 3.10.20、JAX/Flax/Optax/OpenCV
-[完成] Online RL JAX GPU 矩阵乘法和 43 项测试
+[完成] Online RL JAX GPU 矩阵乘法和 47 项测试
 [完成] CFS 日志、checkpoint、离线 wheelhouse/归档与 Git bundle 同步流程
 [完成] 根项目 uv.lock 与 Online RL uv.lock 可校验
-[完成] 确定性 fake 环境实现与 46 项 Online RL 本地测试
+[完成] 确定性 fake 环境、fake Machine A healthz/batch contract 与 47 项 Online RL 测试
+[完成] 云端 fake 闭环：3 个 episode、18 条 replay transition、Learner global_step=2、Actor version=2
+[完成] fake 闭环持久化：raw episode、Replay journal、Actor snapshot history、Learner checkpoint、metrics/logs
+[完成] fake 服务停止/重启：Replay=18、Actor version=2、Learner global_step=2 恢复
 ```
 
 核心证据目录：
 
 ```text
 RLT 日志：/mnt/cfs/usr/wujh/openpi-RLT/logs/training/
-Online RL 测试日志：/mnt/cfs/usr/wujh/openpi-RLT/logs/tests/online-rl310-20260908.log
+Online RL 最终测试日志：/mnt/cfs/usr/wujh/openpi-RLT/logs/tests/online-rl310-fake-smoke-final-20260908.log
+Fake 闭环运行目录：/mnt/cfs/usr/wujh/openpi-RLT/runs/online_rl/fake-machine-a-smoke-20260908-final/
 RLT checkpoint：/mnt/cfs/usr/wujh/openpi-RLT/checkpoints/rlt_stage1/
 ```
 
@@ -443,16 +449,16 @@ RLT checkpoint：/mnt/cfs/usr/wujh/openpi-RLT/checkpoints/rlt_stage1/
 下一步不启动真实机器人，也不直接开始大规模训练。按照风险从低到高、且不等待大模型资产的顺序执行：
 
 ```text
-1. 阶段 7：fake Machine A + 确定性 fake 环境闭环
-   → 验证 Actor、Replay、Learner、snapshot、热加载和重启恢复。
+1. 阶段 4：在本地准备公开 ALOHA 数据和 Pi0 权重，上传/落盘到 CFS
+   → 先建立可断点续传的资产清单，再审计数据 schema、许可证、缓存路径与 14 维/7 维 action contract。
 
-2. 阶段 4：在本地准备公开 ALOHA 数据和 Pi0 权重，上传/落盘到 CFS
-   → 审计数据 schema 与 14 维/7 维 action contract。
+2. 阶段 5：新增并运行 Pi0 + ALOHA RLT 配置
+   → 20-step 起步，检查 loss、显存、checkpoint 和恢复；仅在阶段 4 的数据与权重审计通过后执行。
 
-3. 阶段 5：新增并运行 Pi0 + ALOHA RLT 配置
-   → 20-step 起步，检查 loss、显存、checkpoint 和恢复。
+3. 阶段 6：Machine A 与部署 contract
+   → 使实际 Pi0/RLT 服务明确输出 `z_rl + proprio + ref_chunk`，并保持 `127.0.0.1` 监听。
 
-4. 阶段 6/8：在明确动作 contract 后，进行 Machine A 与 Machine B 多进程联调。
+4. 阶段 8：以真实 Machine A 替换 fake Machine A，复核已有 Machine B 多进程闭环。
 
 5. 阶段 9/10：ManiSkill adapter 与仿真 Online RL 对照实验。
 ```
