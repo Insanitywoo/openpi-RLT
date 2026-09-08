@@ -1,3 +1,13 @@
 .venv
 checkpoints
 data
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+*.pyc
+runs
+cache
+logs
+assets
