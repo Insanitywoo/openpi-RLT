@@ -39,6 +39,7 @@ Filter: TypeAlias = nnx.filterlib.Filter
 
 AGILEX_LEROBOT_REPO = os.environ.get("AGILEX_LEROBOT_REPO", "your_hf_username/agilex_ethernet_lerobot")
 AGILEX_PI05_BASE_CKPT = os.environ.get("AGILEX_PI05_BASE_CKPT", "gs://openpi-assets/checkpoints/pi05_base/params")
+ALOHA_SIM_DATASET_ROOT = os.environ.get("OPENPI_ALOHA_SIM_DATASET_ROOT")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -76,6 +77,9 @@ class DataConfig:
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
     norm_stats: dict[str, _transforms.NormStats] | None = None
+    # Optional immutable local dataset directory. Used for dataset formats that the pinned
+    # third-party reader cannot consume safely, such as consolidated LeRobot v3 ALOHA.
+    local_dataset_root: str | None = None
 
     # Used to adopt the inputs from a dataset specific format to a common format
     # which is expected by the data transforms.
@@ -243,6 +247,9 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
     # the space used by the pi internal runtime which was used to train the base model. People who
     # use standard Aloha data should set this to true.
     adapt_to_pi: bool = True
+    # Optional consolidated LeRobot v3 dataset root. If set, OpenPI uses its offline
+    # reader instead of asking the pinned LeRobot client to rewrite the dataset layout.
+    local_dataset_root: str | None = None
 
     # Repack transforms.
     repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
@@ -282,6 +289,7 @@ class LeRobotAlohaDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             action_sequence_keys=self.action_sequence_keys,
+            local_dataset_root=self.local_dataset_root,
         )
 
 
@@ -1011,6 +1019,57 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=20_000,
+    ),
+    # Public ALOHA sim RLT baseline. The public dataset uses the consolidated
+    # LeRobot v3 layout; OPENPI_ALOHA_SIM_DATASET_ROOT must point to its offline
+    # mirror before running either training config.
+    TrainConfig(
+        name="rlt_pi0_aloha",
+        model=pi0_config.Pi0Config(),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lerobot/aloha_sim_transfer_cube_human",
+            default_prompt="Transfer cube",
+            use_delta_joint_actions=False,
+            local_dataset_root=ALOHA_SIM_DATASET_ROOT,
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi0_base/assets",
+                asset_id="trossen",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=1,
+        num_workers=2,
+        num_train_steps=5_000,
+        exp_name="rlt_pi0_aloha",
+        rlt_num_tokens=1,
+        rlt_num_layers=2,
+        rlt_embed_dim=2048,
+        rlt_input_dim=2048,
+        rlt_alpha=0.0,
+    ),
+    TrainConfig(
+        name="rlt_pi0_aloha_joint",
+        model=pi0_config.Pi0Config(),
+        data=LeRobotAlohaDataConfig(
+            repo_id="lerobot/aloha_sim_transfer_cube_human",
+            default_prompt="Transfer cube",
+            use_delta_joint_actions=False,
+            local_dataset_root=ALOHA_SIM_DATASET_ROOT,
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi0_base/assets",
+                asset_id="trossen",
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=1,
+        num_workers=2,
+        num_train_steps=5_000,
+        exp_name="rlt_pi0_aloha_joint",
+        rlt_num_tokens=1,
+        rlt_num_layers=2,
+        rlt_embed_dim=2048,
+        rlt_input_dim=2048,
+        rlt_alpha=1.0,
     ),
     #
     # Agilex bag image (3 cameras) fine-tuning config.

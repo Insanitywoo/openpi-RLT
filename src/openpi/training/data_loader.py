@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 import openpi.models.model as _model
+from openpi.training.aloha_v3_dataset import AlohaV3Dataset
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.transforms as _transforms
@@ -136,6 +137,8 @@ def create_torch_dataset(
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
+    if data_config.local_dataset_root is not None:
+        return AlohaV3Dataset(data_config.local_dataset_root, action_horizon=action_horizon)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
     dataset = lerobot_dataset.LeRobotDataset(
