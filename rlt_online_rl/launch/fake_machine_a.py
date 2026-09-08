@@ -7,8 +7,12 @@ python launch/fake_machine_a.py
 
 from __future__ import annotations
 
+import http
+
 import numpy as np
 from openpi_client import msgpack_numpy
+from websockets.datastructures import Headers
+from websockets.http11 import Response
 from websockets.sync.server import serve
 
 HOST = "127.0.0.1"
@@ -51,6 +55,18 @@ def build_payload(observation: dict) -> dict:
     }
 
 
+def healthz(_connection, request):
+    """Serve the MachineAFeatureClient readiness probe on the WebSocket port."""
+    if request.path != "/healthz":
+        return None
+    return Response(
+        http.HTTPStatus.OK,
+        "OK",
+        Headers([("Content-Type", "text/plain"), ("Content-Length", "3")]),
+        b"OK\n",
+    )
+
+
 def handler(ws) -> None:
     ws.send(packer.pack({"server": "fake-machine-a", "mode": "nudge-no-return"}))
     while True:
@@ -64,7 +80,7 @@ def handler(ws) -> None:
 
 def main() -> None:
     print(f"[fake_a] serving ws://{HOST}:{PORT}", flush=True)
-    with serve(handler, HOST, PORT, max_size=None, compression=None) as server:
+    with serve(handler, HOST, PORT, max_size=None, compression=None, process_request=healthz) as server:
         server.serve_forever()
 
 
