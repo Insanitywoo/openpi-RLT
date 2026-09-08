@@ -42,7 +42,8 @@ def test_fake_env_is_deterministic_and_emits_env_driver_trace() -> None:
     assert len(info_a["step_trace"]) == 10
     assert info_a["step_trace"][0]["source"] == 2
     assert info_a["step_trace"][0]["actor_param_version"] == 3
-    np.testing.assert_array_equal(info_a["chunk_start_features"]["z_rl"], np.zeros((2048,), dtype=np.float32))
+    np.testing.assert_array_equal(info_a["chunk_start_features"].z_rl, np.zeros((2048,), dtype=np.float32))
+    assert info_a["policy_anchor_features"] == [plan.start_features]
     assert info_a["policy_anchor_offsets"] == [0]
     assert info_b["success"] == 0
 

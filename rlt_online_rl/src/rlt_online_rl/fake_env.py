@@ -122,19 +122,11 @@ class DeterministicChunkEnv:
             "success": success,
             "source": int(plan.source),
             "step_trace": step_trace,
-            "chunk_start_features": {
-                "z_rl": np.asarray(plan.start_features.z_rl, dtype=np.float32),
-                "proprio": np.asarray(plan.start_features.proprio, dtype=np.float32),
-                "ref_chunk": np.asarray(plan.start_features.ref_chunk, dtype=np.float32),
-            },
+            # EnvDriver consumes these fields as ChunkFeatures objects, matching
+            # the ROS adapter's execute_chunk() contract.
+            "chunk_start_features": plan.start_features,
             "policy_anchor_offsets": [0],
-            "policy_anchor_features": [
-                {
-                    "z_rl": np.asarray(plan.start_features.z_rl, dtype=np.float32),
-                    "proprio": np.asarray(plan.start_features.proprio, dtype=np.float32),
-                    "ref_chunk": np.asarray(plan.start_features.ref_chunk, dtype=np.float32),
-                }
-            ],
+            "policy_anchor_features": [plan.start_features],
         }
 
     def _observation(self) -> dict[str, np.ndarray]:
