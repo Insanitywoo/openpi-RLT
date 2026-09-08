@@ -418,14 +418,32 @@ uv 管理的 Python 3.11.15 和 3.10.20
 /root/workspace/openpi-rlt-system/online-rl310/.venv
 ```
 
-当前下一步按顺序执行：
+截至 2026-09-08，根项目 RLT 阶段 1 已完成实际云端验收：
 
 ```text
-将 lerobot Git URL 定向到 CFS mirror
-→ 在 tmux 中按 uv.lock 从云端可达的 PyPI 安装普通依赖
-→ 只对明确失败的依赖制作小范围 wheelhouse/源码归档
-→ 运行导入、GPU 和测试验收
-→ 本地准备并上传 Hugging Face ALOHA 数据
+[完成] Python 3.11 根环境与受限 Git mirror
+[完成] CUDA 12.8 PyTorch wheelhouse 离线传输与安装
+[完成] sm_120 PyTorch CUDA 实际算子验证
+[完成] JAX 0.5.3 私有 CUDA 运行时隔离与实际算子验证
+[完成] debug_rlt fake-data 训练、checkpoint 保存和恢复
+[完成] debug_rlt_joint fake-data 联合损失训练
+```
+
+根环境的 RLT 命令必须通过系统盘包装器运行：
+
+```text
+/root/workspace/openpi-rlt-system/run-openpi-jax.sh
+```
+
+包装器和恢复规则见 `CLOUD_DEPLOYMENT_GUIDE.zh-CN.md` 第 15 节。不要对已验收环境直接执行普通 `uv sync --active --locked`，避免重写 CUDA 运行时。
+
+当前下一阶段按顺序执行：
+
+```text
+Python 3.10 online RL 环境离线/镜像依赖准备
+→ rlt_online_rl 全部单测
+→ fake Machine A + Machine B / 确定性 fake 环境闭环
+→ 再准备公开 ALOHA 数据与 Pi0 权重
 ```
 
 完整的可复制命令、路径和成功判据见

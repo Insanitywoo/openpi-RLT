@@ -1140,3 +1140,112 @@ nvidia-smi
 ```
 
 故障应先分类为环境、网络、依赖、CUDA/JAX、显存、数据 schema、checkpoint、RPC 或算法数值问题，再决定下一步，不以“重装全部依赖”作为默认排障方式。
+
+---
+
+## 15. 2026-09-08：RLT 阶段 1 已验证运行时（Pro6000 / sm_120）
+
+本节记录已在当前百舸云开发机实际验证的运行时，优先级高于本文中较早的“直接 `uv sync`”示例。它用于 RLT 阶段 1；在线 RL 的 Python 3.10 环境仍是下一阶段的独立工作。
+
+### 15.1 已验证版本与兼容性结论
+
+云端 GPU 的 compute capability 为 `sm_120`。项目初始锁定的 `torch==2.7.1+cu126` 虽能发现 CUDA 设备，但不包含 `sm_120` 内核；实际 CUDA 矩阵乘法会以 `no kernel image is available` 失败。因此不能将“`torch.cuda.is_available()` 为真”视为 GPU 可训练的验收。
+
+当前根 RLT 环境已验证使用：
+
+```text
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+Python 3.11.15
+JAX 0.5.3
+```
+
+`torch==2.10.1+cu128` 在准备时没有可用的官方 wheel，因此使用与 `torchvision==0.25.0+cu128` 配对、且实际存在的 `torch==2.10.0+cu128`。该 wheel 的 arch list 包含 `sm_120`，并已在云端对 CUDA 矩阵乘法完成真实验收。
+
+根项目的 `pyproject.toml` 和 `uv.lock` 已记录上述 PyTorch CUDA 12.8 来源。不要自行将它降回旧版，也不要混装不匹配的 `torch` / `torchvision` wheel。
+
+### 15.2 JAX 私有 CUDA 运行时与统一启动包装器
+
+JAX 0.5.3 与 PyTorch CUDA 12.8 用户态库直接混用时，JAX 可发现 GPU，但矩阵乘法可能失败。为保持锁定的 JAX 版本，已在**系统盘**保存它自己的私有 CUDA 动态库：
+
+```text
+/root/workspace/openpi-rlt-system/jax053-cuda-libs/nvidia
+```
+
+必须通过下列包装器启动所有根项目的 JAX/RLT 命令：
+
+```text
+/root/workspace/openpi-rlt-system/run-openpi-jax.sh
+```
+
+包装器会加载 `env.sh`，将该私有库目录置入 `LD_LIBRARY_PATH`，然后 `exec` 原命令。它不替换项目代码、不修改 CFS，也不适用于 Python 3.10 的在线 RL 环境。
+
+示例（在云端 shell 内执行）：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+cd "$OPENPI_REPO"
+/root/workspace/openpi-rlt-system/run-openpi-jax.sh \
+  "$OPENPI311_VENV/bin/python" scripts/train_rlt.py debug_rlt
+```
+
+最小运行时验收应同时包含 JAX 和 PyTorch 的**真实** CUDA 算子，而非仅打印版本或设备名称：
+
+```bash
+source /root/workspace/openpi-rlt-system/env.sh
+/root/workspace/openpi-rlt-system/run-openpi-jax.sh \
+  "$OPENPI311_VENV/bin/python" - <<'PY'
+import jax
+import jax.numpy as jnp
+import torch
+
+print("JAX devices:", jax.devices())
+print("JAX matmul:", float((jnp.ones((32, 32)) @ jnp.ones((32, 32))).block_until_ready()[0, 0]))
+print("Torch:", torch.__version__)
+print("Torch arch:", torch.cuda.get_arch_list())
+print("Torch matmul:", float((torch.ones((32, 32), device="cuda") @ torch.ones((32, 32), device="cuda"))[0, 0]))
+PY
+```
+
+成功条件：JAX 返回 `CudaDevice`、两次 matmul 都有数值输出、PyTorch arch list 包含 `sm_120`。
+
+### 15.3 离线 wheelhouse 与重建规则
+
+已上传的 Python 3.11 CUDA 12.8 wheelhouse 位于 CFS：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/cache/wheelhouse/torch-2.10.0-cu128-cp311-linux-x86_64
+```
+
+其中包含 PyTorch、Torchvision、Triton 与匹配的 NVIDIA CUDA 用户态 wheel。它是可复用的重建资产，不进入 Git，也不应复制整个本地 `.venv`。
+
+当前已验证环境上**不要直接执行**普通的：
+
+```bash
+uv sync --active --locked
+```
+
+原因是该命令可能重新解析/安装 CUDA 运行时，并破坏已经验证的 JAX/PyTorch 组合；仅 `source env.sh` 也不会激活 `$OPENPI311_VENV`，有创建仓库 `.venv` 的风险。
+
+若系统盘环境因重建而丢失，应按“创建 Python 3.11 venv → 从上述 wheelhouse 离线安装 PyTorch CUDA 12.8 运行时 → 安装其余锁定依赖/本地 Git mirror → 恢复 JAX 私有运行时 → 用包装器执行双 matmul 验收”的顺序恢复，并把完整命令和日志记录到 CFS。不要在未确认网络与 wheel 来源时反复重试在线安装。
+
+### 15.4 RLT 阶段 1 已完成验收
+
+截至 **2026-09-08**，以下云端实测均已完成，日志与 checkpoint 保留在 CFS：
+
+- `torch 2.10.0+cu128` 的 `sm_120` CUDA matmul；
+- JAX 0.5.3 GPU matmul（经 `run-openpi-jax.sh`）；
+- `openpi`、`openpi_client`、`lerobot` 与 RLT 模块导入；
+- `debug_rlt` fake-data 10-step 训练及 checkpoint 保存；
+- 同一实验从 checkpoint 恢复并续跑；
+- `debug_rlt_joint` fake-data 10-step 联合损失训练，确认 `rlt_loss` 和 `vla_loss` 都产生；
+- CFS checkpoint 写入。
+
+对应训练日志：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/logs/training/cloud-debug-rlt-20260908-124731.log
+/mnt/cfs/usr/wujh/openpi-RLT/logs/training/cloud-debug-rlt-joint-20260908-125330.log
+```
+
+这表示 RLT 阶段 1 的**软件、GPU、训练、恢复与持久化链路**已就绪；尚未下载真实 ALOHA/Hugging Face 数据或 Pi0 权重，也尚未开始正式训练。下一独立阶段是 Python 3.10 `rlt_online_rl` 环境和在线 RL 单测。
