@@ -37,11 +37,17 @@ def test_healthz_and_websocket_payload_are_compatible() -> None:
         with websockets.sync.client.connect(f"ws://127.0.0.1:{port}", compression=None, open_timeout=2.0) as ws:
             metadata = msgpack_numpy.unpackb(ws.recv(timeout=2.0))
             assert metadata["server"] == "fake-machine-a"
+            assert metadata["supports_batch"] is True
             ws.send(packer.pack({"state": np.arange(7, dtype=np.float32)}))
             payload = msgpack_numpy.unpackb(ws.recv(timeout=2.0))
+            ws.send(packer.pack({"batch": [{"state": np.zeros(7, dtype=np.float32)}, {"state": np.ones(7, dtype=np.float32)}]}))
+            batch_payload = msgpack_numpy.unpackb(ws.recv(timeout=2.0))
         assert payload["z_rl"].shape == (fake_machine_a.Z_DIM,)
         assert payload["proprio"].shape == (fake_machine_a.PROPRIO_DIM,)
         assert payload["ref_chunk"].shape == (fake_machine_a.CHUNK_LEN, fake_machine_a.ACTION_DIM)
         np.testing.assert_allclose(payload["proprio"], np.arange(7, dtype=np.float32))
+        assert len(batch_payload["batch_results"]) == 2
+        np.testing.assert_allclose(batch_payload["batch_results"][0]["proprio"], np.zeros(7, dtype=np.float32))
+        np.testing.assert_allclose(batch_payload["batch_results"][1]["proprio"], np.ones(7, dtype=np.float32))
         server.shutdown()
         thread.join(timeout=2.0)

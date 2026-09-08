@@ -68,13 +68,20 @@ def healthz(_connection, request):
 
 
 def handler(ws) -> None:
-    ws.send(packer.pack({"server": "fake-machine-a", "mode": "nudge-no-return"}))
+    ws.send(packer.pack({"server": "fake-machine-a", "mode": "nudge-no-return", "supports_batch": True}))
     while True:
         try:
             raw = ws.recv()
         except Exception:
             return
         observation = msgpack_numpy.unpackb(raw)
+        if isinstance(observation, dict) and "batch" in observation:
+            batch = observation["batch"]
+            if not isinstance(batch, list):
+                ws.send("fake Machine A expects batch to be a list")
+                continue
+            ws.send(packer.pack({"batch_results": [build_payload(item) for item in batch]}))
+            continue
         ws.send(packer.pack(build_payload(observation)))
 
 
