@@ -167,6 +167,10 @@ class AlohaSingleArmChunkEnv:
             raise ValueError(f"Expected Gym-ALOHA 14-D state, got {state14.shape}.")
         return {
             "images": {"cam_high": np.ascontiguousarray(image.transpose(2, 0, 1))},
-            "state": state14[self._arm_slice].copy(),
+            # Machine A's Pi0/ALOHA preprocessing requires the complete
+            # 14-D bimanual proprio vector. EnvDriver deliberately consumes
+            # only the first 7 dimensions as the online single-arm contract;
+            # the active-arm action mapping remains explicit in _merge...().
+            "state": state14.copy(),
             "prompt": self._prompt,
         }
