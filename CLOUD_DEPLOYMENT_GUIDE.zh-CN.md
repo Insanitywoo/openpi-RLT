@@ -1366,3 +1366,58 @@ Online RL 的 Actor、Critic、Learner 和网络实现直接使用 JAX/Flax/Opta
 - 两个 venv 都在系统盘，代码、日志、数据、wheelhouse、模型和 checkpoint 都在 CFS；
 - 不在已验收根环境随意执行普通 `uv sync --active --locked`；恢复时使用记录的离线 wheelhouse/归档和双 matmul 验收；
 - 云端 GitHub HTTPS 仍不可达。CFS 云端仓库与本地采用 Git bundle 同步；本地 `origin` 是否已 push 到 GitHub 需单独以 `git status --branch` 和 `git ls-remote` 确认，不能把云端的本地 `origin/main` 跟踪引用误认为 GitHub 已同步。
+
+
+## 18. 2026-09-08：Pi0 + ALOHA + Gym-ALOHA 仿真闭环与镜像导出
+
+本轮完成了公开 ALOHA v3 数据、Pi0 base、RLT Stage 1、真实 Machine A 和 Gym-ALOHA 单臂 7D Online RL 的软件闭环。Gym-ALOHA 是本轮实际验收的仿真后端；没有将其冒充为 ManiSkill。
+
+### 18.1 资产与训练证据
+
+```text
+本地 ALOHA 资产：/home/seer/openpi-rlt-assets/datasets/lerobot/aloha_sim_transfer_cube_human
+云端 ALOHA 资产：/mnt/cfs/usr/wujh/openpi-RLT/datasets/lerobot/aloha_sim_transfer_cube_human
+云端 Pi0 base：/mnt/cfs/usr/wujh/openpi-RLT/cache/openpi/openpi-assets/checkpoints/pi0_base
+云端 RLT smoke：/mnt/cfs/usr/wujh/openpi-RLT/checkpoints/rlt_stage1/rlt_pi0_aloha/rlt-pi0-aloha-smoke20-wrapper-20260908/21
+```
+
+ALOHA 数据清单：50 episodes、20,000 frames、14D state/action、50Hz；公开 v3 数据的 consolidated parquet/video 布局由 `src/openpi/training/aloha_v3_dataset.py` 离线读取，避免锁定版 LeRobot 客户端把 v3 数据误下载成旧的 per-episode 布局。
+
+RLT smoke 在云端首次因 JAX CUDA 动态库混用出现 `unsupported value or parameter`，改用项目既有的 `run-openpi-jax.sh` 包装器后通过；20 steps 的 loss 从约 `23.02` 降到 `18.66`，随后从 step 19 恢复并运行到 step 21。
+
+### 18.2 Machine A 与 Online RL
+
+真实 Pi0/RLT Machine A 只监听 `127.0.0.1:8000`，contract 验收结果：
+
+```text
+z_rl=(2048,)
+proprio=(7,)
+ref_chunk=(50,7)
+_raw_actions=(50,14)
+```
+
+Gym-ALOHA adapter 明确将 14D 双臂仿真动作映射为一个 7D active-arm Online RL action，另一只 arm 保持当前状态。云端 bounded smoke 运行 2 episodes、写入 62 transitions，Learner 达到 `global_step=4`，Actor 达到 version 2，生成 `latest.pkl`、`step_2.pkl`、`step_4.pkl` 与 actor snapshot history；无 fallback、无 drop。
+
+运行证据：
+
+```text
+/mnt/cfs/usr/wujh/openpi-RLT/logs/services/machine-a-pi0-aloha-rlt-20260908.log
+/mnt/cfs/usr/wujh/openpi-RLT/logs/services/online-rl-aloha-single-arm-smoke-update-20260908.log
+/mnt/cfs/usr/wujh/openpi-RLT/repo/openpi-RLT/rlt_online_rl/runs/online_rl/aloha-single-arm-smoke/
+```
+
+### 18.3 可复现镜像
+
+```text
+镜像：openpi-rlt:sim-ready
+Dockerfile：docker/Dockerfile.rlt-runtime
+Compose：docker/compose.rlt-sim.yaml
+```
+
+镜像内包含：
+
+- `/.venv`：Python 3.11 OpenPI/Pi0/RLT/Machine A；
+- `/online-rl-venv`：Python 3.10 Online RL/Gym-ALOHA；
+- CUDA 12.8 runtime、MuJoCo/EGL 依赖和项目源码。
+
+数据、权重、日志、replay 和 checkpoint 仍通过 CFS 挂载，不写入镜像层。镜像已经通过容器内 JAX GPU 设备发现以及 Gym-ALOHA reset smoke；本机 Docker daemon 的最终镜像 ID 和导出 tar.gz SHA256 以本地资产目录记录为准。

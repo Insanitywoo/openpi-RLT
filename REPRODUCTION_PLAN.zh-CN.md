@@ -410,14 +410,14 @@ CFS 个人目录架构
 | 阶段 1：双环境与依赖资产 | **完成** | 根 Python 3.11 与 Online RL Python 3.10 分离；Git mirror、PyTorch wheelhouse、JAX 私有 CUDA runtime、Online RL 离线归档均已准备。 |
 | 阶段 2：已有测试与 GPU 验证 | **部分完成** | 根环境的 JAX/PyTorch GPU 实算通过；Online RL `47 passed`；完整根项目测试尚未运行，不能标记完成。 |
 | 阶段 3：fake RLT smoke | **完成** | `debug_rlt`、checkpoint 恢复、`debug_rlt_joint` 均通过并写入 CFS。 |
-| 阶段 4：公开 ALOHA 数据和 Pi0 权重 | **未开始** | 先准备/传输资产，再审计 sample schema、动作维度、norm stats 与缓存路径。 |
-| 阶段 5：Pi0 + ALOHA RLT 配置 | **未开始** | 依赖阶段 4；按 `20 → 100 → 1,000 → 5,000` steps 递进。 |
-| 阶段 6：Machine A 与部署 contract | **未开始** | 先解决 14 维 ALOHA 与 7 维 Online RL action contract，以及仅本机监听。 |
+| 阶段 4：公开 ALOHA 数据和 Pi0 权重 | **完成** | ALOHA v3 数据与 `pi0_base` 参数已校验并导入 CFS；已完成 14D schema、50Hz、50 episodes 和 Trossen norm stats 审计。 |
+| 阶段 5：Pi0 + ALOHA RLT 配置 | **完成 smoke** | 新增 `rlt_pi0_aloha`/`rlt_pi0_aloha_joint`；Pi0 + ALOHA 20-step RLT smoke 及从 step 19 恢复到 step 21 已通过。正式 100/1,000/5,000 steps 未启动。 |
+| 阶段 6：Machine A 与部署 contract | **完成 smoke** | 真实 Pi0/RLT Machine A 在 `127.0.0.1:8000` 运行；输出 `z_rl[2048]`、完整 14D 输入下的 `proprio[7]` 与 `ref_chunk[50,7]`，healthz 和 batch contract 已验证。 |
 | 阶段 7：fake Machine A + fake 环境 | **完成** | 云端 bounded smoke 已验证 fake Machine A、Actor、Replay、Learner、热加载、checkpoint/replay 恢复与持久化工件。 |
-| 阶段 8：Machine B 多进程 | **未开始** | 依赖阶段 7 的确定性闭环。 |
-| 阶段 9：ManiSkill adapter | **未开始** | 先单独适配稳定单臂 7 维任务，再接 fake Machine A。 |
-| 阶段 10：仿真 Online RL 对照实验 | **未开始** | 依赖阶段 8、9。 |
-| 阶段 11：镜像和分布式扩展 | **未开始** | 只在训练、服务、仿真闭环稳定后进行。 |
+| 阶段 8：Machine B 多进程 | **完成仿真 smoke** | 真实 Machine A + Actor + Replay + Learner + Gym-ALOHA 单臂 7D adapter 已完成 2 episode 闭环，Learner 到 `global_step=4`，Actor version 到 `2`。 |
+| 阶段 9：仿真 adapter | **完成 Gym-ALOHA 版本** | 已完成可无窗口运行的 Gym-ALOHA 单臂 7D adapter；本轮未引入 ManiSkill，避免把两个仿真后端混为同一验收。 |
+| 阶段 10：仿真 Online RL 对照实验 | **完成 bounded smoke** | 已跑通真实 Machine A reference、Actor refinement、Replay、Learner、snapshot、checkpoint 和 episode metrics；不是任务成功率基线或大规模算法结论。 |
+| 阶段 11：镜像和分布式扩展 | **完成镜像导出** | `openpi-rlt:sim-ready` 已构建并通过容器内 JAX GPU、Gym-ALOHA import/reset 验证；镜像 tar.gz 导出资产正在完成校验。 |
 
 ### 6.1 已完成工作与证据
 
@@ -433,6 +433,13 @@ CFS 个人目录架构
 [完成] 云端 fake 闭环：3 个 episode、18 条 replay transition、Learner global_step=2、Actor version=2
 [完成] fake 闭环持久化：raw episode、Replay journal、Actor snapshot history、Learner checkpoint、metrics/logs
 [完成] fake 服务停止/重启：Replay=18、Actor version=2、Learner global_step=2 恢复
+[完成] 公开 ALOHA v3 数据：50 episodes、20,000 frames、14D state/action、50Hz；本地与云端 SHA256 一致
+[完成] Pi0 base 参数：33 个文件、约 11.19 GiB；本地与云端文件大小一致
+[完成] `rlt_pi0_aloha` 20-step smoke、checkpoint step 19，以及恢复到 step 21
+[完成] 真实 Pi0/RLT Machine A：`z_rl=(2048,)`、`proprio=(7,)`、`ref_chunk=(50,7)`，监听 `127.0.0.1:8000`
+[完成] Gym-ALOHA 单臂 7D adapter：显式 left/right 映射，另一只手保持当前状态，不做隐式数组截断
+[完成] 真实 Machine A + Gym-ALOHA + Machine B：2 episodes、62 transitions、Learner `global_step=4`、Actor version=2
+[完成] Docker `openpi-rlt:sim-ready` 构建，容器内 JAX GPU 与 Gym-ALOHA smoke
 ```
 
 核心证据目录：
@@ -444,23 +451,18 @@ Fake 闭环运行目录：/mnt/cfs/usr/wujh/openpi-RLT/runs/online_rl/fake-machi
 RLT checkpoint：/mnt/cfs/usr/wujh/openpi-RLT/checkpoints/rlt_stage1/
 ```
 
-### 6.2 接下来的执行顺序
+### 6.2 当前结论与可选后续
 
-下一步不启动真实机器人，也不直接开始大规模训练。按照风险从低到高、且不等待大模型资产的顺序执行：
+本轮已完成“Pi0 + ALOHA 数据/RLT + 真实 Machine A + Gym-ALOHA 单臂 7D Online RL + Docker 镜像”的软件闭环。当前不把它表述为 ManiSkill 结果，也不把 bounded smoke 表述为真实机器人成功率。
+
+正式训练和扩展可以从以下顺序开始：
 
 ```text
-1. 阶段 4：在本地准备公开 ALOHA 数据和 Pi0 权重，上传/落盘到 CFS
-   → 先建立可断点续传的资产清单，再审计数据 schema、许可证、缓存路径与 14 维/7 维 action contract。
-
-2. 阶段 5：新增并运行 Pi0 + ALOHA RLT 配置
-   → 20-step 起步，检查 loss、显存、checkpoint 和恢复；仅在阶段 4 的数据与权重审计通过后执行。
-
-3. 阶段 6：Machine A 与部署 contract
-   → 使实际 Pi0/RLT 服务明确输出 `z_rl + proprio + ref_chunk`，并保持 `127.0.0.1` 监听。
-
-4. 阶段 8：以真实 Machine A 替换 fake Machine A，复核已有 Machine B 多进程闭环。
-
-5. 阶段 9/10：ManiSkill adapter 与仿真 Online RL 对照实验。
+1. 视资源情况继续 rlt_pi0_aloha：100 → 1,000 → 5,000 steps
+2. 运行 reference-only 与 Actor refinement 的固定种子对照集
+3. 若必须使用 ManiSkill，再新增独立 ManiSkill adapter 和对应验收
+4. 将已导出的 sim-ready 镜像上传到分布式训练节点，使用各节点 CFS 挂载数据/权重/checkpoint
+5. 单卡基线稳定后，再规划 FSDP、多 GPU、Pi0.5/AgileX 和真实机器人
 ```
 
 在线 RL 不使用 PyTorch；它通过 JAX CUDA 使用 GPU。PyTorch 的 `sm_120` 兼容问题仅属于根 OpenPI/RLT Python 3.11 环境。ROS 2 / `rclpy` 是真实机器人阶段的系统级依赖，不属于当前 uv venv。
