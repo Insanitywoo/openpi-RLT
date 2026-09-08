@@ -1,0 +1,26 @@
+services:
+  rlt_runtime:
+    image: ${OPENPI_RLT_IMAGE:-openpi-rlt:sim-ready}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.rlt-runtime
+    network_mode: host
+    ipc: host
+    shm_size: 16gb
+    environment:
+      OPENPI_DATA_HOME: /openpi-cfs/cache/openpi
+      HF_HOME: /openpi-cfs/cache/huggingface
+      HF_LEROBOT_HOME: /openpi-cfs/datasets
+      OPENPI_ALOHA_SIM_DATASET_ROOT: /openpi-cfs/datasets/lerobot/aloha_sim_transfer_cube_human
+      MUJOCO_GL: egl
+      XLA_PYTHON_CLIENT_PREALLOCATE: "false"
+    volumes:
+      - ${OPENPI_CFS_ROOT:-/mnt/cfs/usr/wujh/openpi-RLT}:/openpi-cfs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["/bin/bash"]

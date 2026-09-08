@@ -1,0 +1,38 @@
+# Reproducible OpenPI-RLT training and simulation runtime.
+# Build from repository root with BuildKit enabled.
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG UV_VERSION=0.12.5
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git git-lfs build-essential clang \
+    libgl1 libegl1 libgles2 libglfw3 libosmesa6 libglew2.2 \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_INSTALL_DIR=/usr/local/bin sh
+
+ENV UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/.venv \
+    MUJOCO_GL=egl \
+    XLA_PYTHON_CLIENT_PREALLOCATE=false \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src:/app/packages/openpi-client/src:/app/rlt_online_rl/src
+WORKDIR /app
+
+COPY pyproject.toml uv.lock .python-version ./
+COPY packages/openpi-client/pyproject.toml packages/openpi-client/pyproject.toml
+COPY packages/openpi-client/src packages/openpi-client/src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-install-project --no-dev
+
+COPY rlt_online_rl/pyproject.toml rlt_online_rl/uv.lock rlt_online_rl/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_PROJECT_ENVIRONMENT=/online-rl-venv uv sync --project rlt_online_rl --frozen --no-install-project
+
+COPY . /app
+RUN /.venv/bin/python -m compileall -q src scripts && \
+    /online-rl-venv/bin/python -m compileall -q rlt_online_rl/src rlt_online_rl/scripts
+
+LABEL org.opencontainers.image.title="openpi-RLT runtime" \
+      org.opencontainers.image.description="Pi0/RLT training, Machine A and Gym-ALOHA online RL simulation" \
+      org.opencontainers.image.source="https://github.com/Insanitywoo/openpi-RLT"
+CMD ["/bin/bash"]
