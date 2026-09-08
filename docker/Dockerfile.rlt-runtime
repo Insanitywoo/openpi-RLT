@@ -23,7 +23,7 @@ COPY packages/openpi-client/pyproject.toml packages/openpi-client/pyproject.toml
 COPY packages/openpi-client/src packages/openpi-client/src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv $UV_PROJECT_ENVIRONMENT && \
-    uv pip install --python $UV_PROJECT_ENVIRONMENT/bin/python hatchling && \
+    uv pip install --python $UV_PROJECT_ENVIRONMENT/bin/python hatchling editables && \
     GIT_LFS_SKIP_SMUDGE=1 uv sync --frozen --no-install-project --no-dev --no-build-isolation
 
 COPY rlt_online_rl/pyproject.toml rlt_online_rl/uv.lock rlt_online_rl/
