@@ -20,7 +20,7 @@ experiment:
     critic_lr: 0.0003
     target_tau: 0.005
     actor_update_period: 2
-    warmup_min_size: 20
+    warmup_min_size: 2
     warmup_post_collect_updates: 2
     freeze_after_warmup: false
     grad_updates_per_cycle: 1
@@ -37,7 +37,7 @@ runtime:
     replay_url: http://127.0.0.1:9202
     checkpoint_dir: ./runs/online_rl/aloha-single-arm-smoke/checkpoints
     actor_snapshot_path: ./runs/online_rl/aloha-single-arm-smoke/actor_snapshot/actor_snapshot.pkl
-    sample_batch_size: 8
+    sample_batch_size: 2
     checkpoint_interval_steps: 2
     push_actor_interval_steps: 1
     xla_mem_fraction: 0.20
