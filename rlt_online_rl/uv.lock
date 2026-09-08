@@ -1020,9 +1020,11 @@ name = "rlt-online-rl"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dm-control" },
     { name = "flax" },
     { name = "gym-aloha" },
     { name = "jax", extra = ["cuda12"] },
+    { name = "mujoco" },
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "openpi-client" },
@@ -1042,9 +1044,11 @@ monitor = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dm-control", specifier = "==1.0.14" },
     { name = "flax", specifier = "==0.10.2" },
     { name = "gym-aloha", specifier = "==0.1.1" },
     { name = "jax", extras = ["cuda12"], specifier = "==0.5.3" },
+    { name = "mujoco", specifier = "==2.3.7" },
     { name = "numpy", specifier = ">=1.22.4,<2.0.0" },
     { name = "opencv-python", specifier = ">=4.10.0.84" },
     { name = "openpi-client" },
