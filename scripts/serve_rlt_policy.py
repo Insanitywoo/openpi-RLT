@@ -330,6 +330,9 @@ class Args:
     port: int = 8000
     default_prompt: str | None = None
     shared_prefix_inference: bool = False
+    # Limit startup compilation. Online requests can still compile larger
+    # batches on demand; bounded simulation only requires batch size 1-4.
+    warmup_max_batch_size: int = 1
 
 
 def main(args: Args) -> None:
@@ -410,7 +413,11 @@ def main(args: Args) -> None:
 
     # Test and warmup batch inference with various batch sizes
     # This triggers JIT compilation for common batch sizes so clients don't time out
+    if args.warmup_max_batch_size < 1:
+        raise ValueError("warmup_max_batch_size must be positive.")
     for warmup_bs in RLTPolicy.COMPILED_BATCH_SIZES:
+        if warmup_bs > args.warmup_max_batch_size:
+            continue
         logging.info(f"Warmup batch inference (batch_size={warmup_bs})...")
         try:
             batch_obs = {"batch": [fake_dict] * warmup_bs}
