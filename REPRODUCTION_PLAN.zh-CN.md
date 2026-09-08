@@ -398,68 +398,65 @@ CFS 个人目录架构
 仿真路线：fake 环境 → ManiSkill
 ```
 
-云端当前尚未完成：
+## 6. 当前执行状态（2026-09-08）
+
+下表是本计划的唯一当前状态摘要；以它替代早期“尚未完成”的环境安装描述。
+
+| 阶段 | 状态 | 已完成或下一关卡 |
+|---|---|---|
+| 阶段 0：云端基础环境 | **完成** | SSH、git、tmux、CFS 目录、系统盘/CFS 分工、GPU 与磁盘检查完成。 |
+| 阶段 1：双环境与依赖资产 | **完成** | 根 Python 3.11 与 Online RL Python 3.10 分离；Git mirror、PyTorch wheelhouse、JAX 私有 CUDA runtime、Online RL 离线归档均已准备。 |
+| 阶段 2：已有测试与 GPU 验证 | **部分完成** | 根环境的 JAX/PyTorch GPU 实算通过；Online RL `43 passed`；完整根项目测试尚未运行，不能标记完成。 |
+| 阶段 3：fake RLT smoke | **完成** | `debug_rlt`、checkpoint 恢复、`debug_rlt_joint` 均通过并写入 CFS。 |
+| 阶段 4：公开 ALOHA 数据和 Pi0 权重 | **未开始** | 先准备/传输资产，再审计 sample schema、动作维度、norm stats 与缓存路径。 |
+| 阶段 5：Pi0 + ALOHA RLT 配置 | **未开始** | 依赖阶段 4；按 `20 → 100 → 1,000 → 5,000` steps 递进。 |
+| 阶段 6：Machine A 与部署 contract | **未开始** | 先解决 14 维 ALOHA 与 7 维 Online RL action contract，以及仅本机监听。 |
+| 阶段 7：fake Machine A + fake 环境 | **未开始** | 不依赖真实模型/数据，可先验证 Actor/Replay/Learner/snapshot 闭环。 |
+| 阶段 8：Machine B 多进程 | **未开始** | 依赖阶段 7 的确定性闭环。 |
+| 阶段 9：ManiSkill adapter | **未开始** | 先单独适配稳定单臂 7 维任务，再接 fake Machine A。 |
+| 阶段 10：仿真 Online RL 对照实验 | **未开始** | 依赖阶段 8、9。 |
+| 阶段 11：镜像和分布式扩展 | **未开始** | 只在训练、服务、仿真闭环稳定后进行。 |
+
+### 6.1 已完成工作与证据
 
 ```text
-根项目和在线 RL 依赖安装
-本地 wheelhouse/源码归档准备
-云端 Git mirror/离线依赖安装验证
-云端 JAX/PyTorch GPU 验收
-云端测试和训练
+[完成] 云端根 RLT 环境：Python 3.11.15、JAX 0.5.3、torch 2.10.0+cu128
+[完成] sm_120 上 JAX 与 PyTorch 的实际 GPU 矩阵乘法
+[完成] RLT fake-data 训练、checkpoint 保存/恢复、联合损失路径
+[完成] 云端 Online RL 环境：Python 3.10.20、JAX/Flax/Optax/OpenCV
+[完成] Online RL JAX GPU 矩阵乘法和 43 项测试
+[完成] CFS 日志、checkpoint、离线 wheelhouse/归档与 Git bundle 同步流程
+[完成] 根项目 uv.lock 与 Online RL uv.lock 可校验
 ```
 
-云端当前已经完成：
+核心证据目录：
 
 ```text
-git、tmux 安装
-/root/workspace/openpi-rlt-system/env.sh
-uv 管理的 Python 3.11.15 和 3.10.20
-/root/workspace/openpi-rlt-system/openpi311/.venv
-/root/workspace/openpi-rlt-system/online-rl310/.venv
+RLT 日志：/mnt/cfs/usr/wujh/openpi-RLT/logs/training/
+Online RL 测试日志：/mnt/cfs/usr/wujh/openpi-RLT/logs/tests/online-rl310-20260908.log
+RLT checkpoint：/mnt/cfs/usr/wujh/openpi-RLT/checkpoints/rlt_stage1/
 ```
 
-截至 2026-09-08，根项目 RLT 阶段 1 已完成实际云端验收：
+### 6.2 接下来的执行顺序
+
+下一步不启动真实机器人，也不直接开始大规模训练。按照风险从低到高、且不等待大模型资产的顺序执行：
 
 ```text
-[完成] Python 3.11 根环境与受限 Git mirror
-[完成] CUDA 12.8 PyTorch wheelhouse 离线传输与安装
-[完成] sm_120 PyTorch CUDA 实际算子验证
-[完成] JAX 0.5.3 私有 CUDA 运行时隔离与实际算子验证
-[完成] debug_rlt fake-data 训练、checkpoint 保存和恢复
-[完成] debug_rlt_joint fake-data 联合损失训练
+1. 阶段 7：fake Machine A + 确定性 fake 环境闭环
+   → 验证 Actor、Replay、Learner、snapshot、热加载和重启恢复。
+
+2. 阶段 4：在本地准备公开 ALOHA 数据和 Pi0 权重，上传/落盘到 CFS
+   → 审计数据 schema 与 14 维/7 维 action contract。
+
+3. 阶段 5：新增并运行 Pi0 + ALOHA RLT 配置
+   → 20-step 起步，检查 loss、显存、checkpoint 和恢复。
+
+4. 阶段 6/8：在明确动作 contract 后，进行 Machine A 与 Machine B 多进程联调。
+
+5. 阶段 9/10：ManiSkill adapter 与仿真 Online RL 对照实验。
 ```
 
-根环境的 RLT 命令必须通过系统盘包装器运行：
-
-```text
-/root/workspace/openpi-rlt-system/run-openpi-jax.sh
-```
-
-包装器和恢复规则见 `CLOUD_DEPLOYMENT_GUIDE.zh-CN.md` 第 15 节。不要对已验收环境直接执行普通 `uv sync --active --locked`，避免重写 CUDA 运行时。
-
-截至 2026-09-08，Online RL Python 3.10 环境也已完成云端准备与验收：
-
-```text
-[完成] 独立 Python 3.10.20 环境
-[完成] JAX 0.5.3 / Flax / Optax / OpenCV 等依赖
-[完成] JAX GPU 实际算子验证
-[完成] rlt_online_rl 全部单测：43 passed
-[完成] CFS 测试日志与离线恢复资产
-```
-
-Online RL 命令使用系统盘包装器：
-
-```text
-/root/workspace/openpi-rlt-system/run-online-rl.sh
-```
-
-详见 `CLOUD_DEPLOYMENT_GUIDE.zh-CN.md` 第 16 节。当前继续按顺序执行：
-
-```text
-fake Machine A + Machine B / 确定性 fake 环境闭环
-→ 再准备公开 ALOHA 数据与 Pi0 权重
-→ 20-step Pi0 + ALOHA RLT smoke
-```
+在线 RL 不使用 PyTorch；它通过 JAX CUDA 使用 GPU。PyTorch 的 `sm_120` 兼容问题仅属于根 OpenPI/RLT Python 3.11 环境。ROS 2 / `rclpy` 是真实机器人阶段的系统级依赖，不属于当前 uv venv。
 
 完整的可复制命令、路径和成功判据见
 [CLOUD_DEPLOYMENT_GUIDE.zh-CN.md](CLOUD_DEPLOYMENT_GUIDE.zh-CN.md)。

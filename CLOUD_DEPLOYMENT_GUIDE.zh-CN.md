@@ -1300,4 +1300,45 @@ rlt_online_rl 全部单测：43 passed
 /mnt/cfs/usr/wujh/openpi-RLT/logs/tests/online-rl310-20260908.log
 ```
 
-测试有一个非阻断警告：当前 pytest 版本提示 `exclude-dependencies` 是未知配置项；不影响 43 个测试通过。Online RL 环境已具备单测和后续 fake Machine B 开发所需的 Python 依赖，但尚未启动在线 RL、Machine A/B、机器人、ROS 或正式训练。
+初次验收时 pytest 曾提示根项目中的 `exclude-dependencies` 为未知配置项；2026-09-08 复核已移除该无效 pytest 配置，随后本地复测为无警告的 `43 passed`。Online RL 环境已具备单测和后续 fake Machine B 开发所需的 Python 依赖，但尚未启动在线 RL、Machine A/B、机器人、ROS 或正式训练。
+
+## 17. 2026-09-08：双环境与项目配置复核
+
+本节是完成根 RLT 与 Online RL 环境后进行的复核结论。
+
+### 17.1 当前配置状态
+
+| 项目 | 状态 | 结论 |
+|---|---|---|
+| 云端代码目录 | `/mnt/cfs/usr/wujh/openpi-RLT/repo/openpi-RLT` | 位于 CFS，符合长期资产规则 |
+| 根 RLT 环境 | Python 3.11.15 | `openpi`、`openpi_client`、JAX 和 PyTorch 可导入 |
+| 根 RLT GPU | JAX 0.5.3、PyTorch 2.10.0+cu128 | 两种框架均已执行实际 CUDA matmul；PyTorch 包含 `sm_120` |
+| Online RL 环境 | Python 3.10.20 | `rlt_online_rl`、`openpi_client`、JAX、Flax、Optax、OpenCV 可导入 |
+| Online RL GPU | JAX 0.5.3 | 经 `run-online-rl.sh` 实际 GPU matmul 通过 |
+| RLT fake training | `debug_rlt`、恢复、`debug_rlt_joint` | 均完成；日志/checkpoint 在 CFS |
+| Online RL 测试 | `rlt_online_rl/tests` | `43 passed`，复核后无 pytest 配置警告 |
+| 网络安全配置 | fake/online 配置 | Actor、Replay、Machine A 默认都使用 `127.0.0.1`，未默认暴露公网端口 |
+
+复核时系统盘可用空间约 `64G`，CFS 可用空间约 `8.3T`；当前环境和已有日志/checkpoint 不存在空间风险。
+
+### 17.2 Online RL 为什么没有 PyTorch
+
+Online RL 的 Actor、Critic、Learner 和网络实现直接使用 JAX/Flax/Optax；其项目依赖是 `jax[cuda12]==0.5.3`，没有 `torch` 或 `torchvision`，代码也没有直接导入 PyTorch。因此 Python 3.10 Online RL 环境**不需要安装 PyTorch**。
+
+它仍然需要 CUDA：JAX 的 CUDA plugin、PJRT 和 NVIDIA 用户态动态库负责将 Actor/Critic 的矩阵计算和梯度更新放到 GPU。当前包装器加载 JAX 的私有 CUDA 动态库，且已执行真实 JAX GPU matmul；所以 Online RL 不是 CPU-only 环境。
+
+根 RLT 环境必须额外安装 PyTorch，是因为 OpenPI 的数据/模型链路会导入它；该环境的 GPU 是 `sm_120`，旧 `torch==2.7.1+cu126` 缺少该架构内核，才需要升级到 `torch==2.10.0+cu128`。Online RL 不调用 PyTorch 内核，故不会重现“旧 PyTorch wheel 不支持 `sm_120`”的问题。JAX 也不是凭版本假设兼容：已在这张 `sm_120` GPU 上完成实际 matmul 验收。
+
+### 17.3 Online RL 的锁文件与 ROS 边界
+
+`rlt_online_rl/uv.lock` 已加入版本控制，Online RL 的普通 Python 依赖现在可被确定性解析。此前 `rlt_online_rl/pyproject.toml` 将 `rclpy` 放在可选 PyPI extra 中，导致 `uv lock` 在所有平台解析时失败；`rclpy` 是 ROS 2 系统分发包，不在 PyPI，不能作为 uv 可解析依赖。
+
+因此项目元数据不再把 `rclpy` 声明为 uv extra。需要 ROS 的真实机器人脚本仍保留在仓库中，但它们属于后续 ROS 2 Humble 专用环境：届时先安装/加载系统 ROS，再建立与 ROS Python ABI 匹配的运行环境，不能在当前 fake/Online RL venv 中直接执行。
+
+### 17.4 仍需遵守的运行规则
+
+- 根 RLT/JAX 命令：`run-openpi-jax.sh`；
+- Online RL/JAX 命令：`run-online-rl.sh`；
+- 两个 venv 都在系统盘，代码、日志、数据、wheelhouse、模型和 checkpoint 都在 CFS；
+- 不在已验收根环境随意执行普通 `uv sync --active --locked`；恢复时使用记录的离线 wheelhouse/归档和双 matmul 验收；
+- 云端 GitHub HTTPS 仍不可达。CFS 云端仓库与本地采用 Git bundle 同步；本地 `origin` 是否已 push 到 GitHub 需单独以 `git status --branch` 和 `git ls-remote` 确认，不能把云端的本地 `origin/main` 跟踪引用误认为 GitHub 已同步。

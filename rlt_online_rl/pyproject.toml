@@ -25,9 +25,8 @@ dev = [
 monitor = [
     "wandb>=0.19.0",
 ]
-robot = [
-    "rclpy",
-]
+# ROS 2 的 rclpy 由 ROS 系统安装（例如 /opt/ros/humble），不在 PyPI 上，
+# 因此不能作为 uv 可解析的项目依赖。真实机器人阶段另行创建 ROS 专用运行环境。
 
 [build-system]
 requires = ["hatchling"]
