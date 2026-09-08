@@ -326,6 +326,7 @@ def load_rlt_model(
 class Args:
     config: str = "rlt_pi05_agilexbag_image"
     checkpoint_dir: str = ""
+    host: str = "127.0.0.1"
     port: int = 8000
     default_prompt: str | None = None
     shared_prefix_inference: bool = False
@@ -382,14 +383,25 @@ def main(args: Args) -> None:
         },
     )
 
-    # Test single inference
+    # Test single inference with the external observation contract. ALOHA
+    # preprocessing consumes standard ``cam_high``/14-D state, while the
+    # online RL payload remains an explicit 7-D single-arm slice.
     logging.info("Testing single inference...")
-    fake_obs = config.model.fake_obs(batch_size=1)
-    fake_dict = {
-        "images": {k: np.asarray(v[0]) for k, v in fake_obs.images.items()},
-        "state": np.zeros(PROPRIO_DIM, dtype=np.float32),
-        "prompt": "test prompt",
-    }
+    if isinstance(config.data, _config.LeRobotAlohaDataConfig):
+        fake_dict = {
+            "images": {
+                "cam_high": np.zeros((3, 480, 640), dtype=np.uint8),
+            },
+            "state": np.zeros((14,), dtype=np.float32),
+            "prompt": args.default_prompt or "Transfer cube",
+        }
+    else:
+        fake_obs = config.model.fake_obs(batch_size=1)
+        fake_dict = {
+            "images": {k: np.asarray(v[0]) for k, v in fake_obs.images.items()},
+            "state": np.zeros(PROPRIO_DIM, dtype=np.float32),
+            "prompt": "test prompt",
+        }
     try:
         result = policy.infer(fake_dict)
         logging.info(f"Single inference OK: z_rl={result['z_rl'].shape}, ref_chunk={result['ref_chunk'].shape}")
@@ -416,7 +428,7 @@ def main(args: Args) -> None:
 
     server = websocket_policy_server.WebsocketPolicyServer(
         policy=policy,
-        host="0.0.0.0",
+        host=args.host,
         port=args.port,
         metadata=policy.metadata,
     )
