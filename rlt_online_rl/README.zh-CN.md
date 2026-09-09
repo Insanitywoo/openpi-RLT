@@ -393,3 +393,36 @@ reports/YYYYMMDDTHHMMSSZ/
 - 视频默认按 50 FPS 写出，可用 `--video-subsample 2` 降低体积；
 - Matplotlib 是绘图可选依赖，缺少时仍会生成 CSV/JSON/Markdown/MP4；需要 PNG 时在对应环境安装 `matplotlib>=3.10.0`；
 - RLT Stage 1 训练入口会持续写入 `metrics/rlt_metrics.jsonl`、`metrics/config.json` 和 `metrics/invocations.jsonl`，因此训练中断或恢复后仍能生成完整曲线。
+
+## 固定 seed 的 ALOHA 对照评估
+
+使用最终 RLT Machine A checkpoint 时，可以将 VLA reference-only 和 Actor refinement 放在相同 seed 下对照：
+
+```bash
+python scripts/evaluate_aloha_policies.py \
+  --condition reference_only \
+  --output-dir /mnt/cfs/usr/wujh/openpi-RLT/artifacts/evaluations/aloha-rlt-15000/reference_only-YYYYMMDD \
+  --machine-a-ws-url ws://127.0.0.1:18000 \
+  --episodes 5 \
+  --seeds 0 1 2 3 4
+
+python scripts/evaluate_aloha_policies.py \
+  --condition actor_refined \
+  --output-dir /mnt/cfs/usr/wujh/openpi-RLT/artifacts/evaluations/aloha-rlt-15000/actor_refined-YYYYMMDD \
+  --machine-a-ws-url ws://127.0.0.1:18000 \
+  --actor-service-url http://127.0.0.1:9201 \
+  --episodes 5 \
+  --seeds 0 1 2 3 4
+```
+
+评估器不会启动 Learner 或写入 Replay，只保存：
+
+```text
+metrics/rollout_metrics.jsonl
+replay/episodes/episode_*.pkl
+evaluation_config.json
+```
+
+之后可用 `scripts/tools/build_experiment_report.py` 生成 CSV、PNG、Markdown 和 MP4。两组评估必须使用相同 seeds、相同 `max_env_steps`、相同 arm 和相同 Machine A checkpoint。
+
+注意：`actor_refined` 使用的是当前 Actor snapshot；如果该 snapshot 是基于不同 RLT checkpoint 训练的，只能作为接口/行为对照，不能直接作为最终算法效果结论。正式比较前应使用相同 Machine A checkpoint 重新收集 replay 并训练 Actor。
