@@ -1,7 +1,9 @@
 import dataclasses
 import functools
+import json
 import logging
 import platform
+import time
 from typing import Any
 
 import etils.epath as epath
@@ -29,6 +31,38 @@ import openpi.training.optimizer as _optimizer
 import openpi.training.sharding as sharding
 import openpi.training.utils as training_utils
 import openpi.training.weight_loaders as _weight_loaders
+
+
+def _append_jsonl(path: epath.Path, record: dict[str, object]) -> None:
+    """Append one durable, JSON-serializable training metric record."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+
+def _write_training_metadata(config: _config.TrainConfig, *, resuming: bool) -> epath.Path:
+    metrics_dir = config.checkpoint_dir / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    metadata = {
+        "config_name": config.name,
+        "exp_name": config.exp_name,
+        "num_train_steps": config.num_train_steps,
+        "batch_size": config.batch_size,
+        "log_interval": config.log_interval,
+        "save_interval": config.save_interval,
+        "keep_period": config.keep_period,
+        "rlt_num_tokens": config.rlt_num_tokens,
+        "rlt_num_layers": config.rlt_num_layers,
+        "rlt_embed_dim": config.rlt_embed_dim,
+        "rlt_input_dim": config.rlt_input_dim,
+        "rlt_alpha": config.rlt_alpha,
+        "seed": config.seed,
+        "updated_at_unix": now,
+    }
+    (metrics_dir / "config.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
+    _append_jsonl(metrics_dir / "invocations.jsonl", {**metadata, "resuming": resuming, "timestamp": now})
+    return metrics_dir / "rlt_metrics.jsonl"
 
 
 def init_logging():
@@ -329,6 +363,7 @@ def main(config: _config.TrainConfig):
         overwrite=config.overwrite,
         resume=config.resume,
     )
+    metrics_path = _write_training_metadata(config, resuming=resuming)
     init_wandb(config, resuming=resuming, enabled=config.wandb_enabled)
 
     data_loader = _data_loader.create_data_loader(
@@ -379,6 +414,13 @@ def main(config: _config.TrainConfig):
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
+            metric_record = {
+                "global_step": int(train_state.step),
+                "loop_step": int(step),
+                "timestamp": time.time(),
+                **{key: float(value) for key, value in reduced_info.items()},
+            }
+            _append_jsonl(metrics_path, metric_record)
             infos = []
         batch = next(data_iter)
 

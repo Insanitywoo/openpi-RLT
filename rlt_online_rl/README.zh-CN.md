@@ -353,3 +353,43 @@ rlt_online_rl/
 |-- train_deploy_alignment/     # ROS 适配器和人工信号桥接
 `-- tests/                      # 运行时单元测试
 ```
+
+## 实验报告与可视化导出
+
+`rlt_online_rl/scripts/tools/build_experiment_report.py` 将在线 RL 运行目录或 RLT Stage 1 checkpoint 实验目录整理为长期可复用的结果包：
+
+```bash
+# 在线 RL：CSV/JSON/Markdown/PNG/MP4
+python scripts/tools/build_experiment_report.py \
+  rlt_online_rl/runs/online_rl/<run-name>
+
+# RLT Stage 1：训练指标 CSV/JSON/Markdown/PNG
+python rlt_online_rl/scripts/tools/build_experiment_report.py \
+  /path/to/checkpoints/rlt_pi0_aloha/<exp-name>
+```
+
+输出目录默认是输入目录下的：
+
+```text
+reports/YYYYMMDDTHHMMSSZ/
+├── summary.json
+├── experiment_report.md
+├── rlt_metrics.csv
+├── learner_metrics.csv
+├── rollout_metrics.csv
+├── replay_stats.csv
+├── episode_summary.csv
+├── rlt_training_metrics.png
+├── online_learner_metrics.png
+├── rollout_metrics.png
+├── action_deviation.png
+└── videos/episode_*.mp4
+```
+
+说明：
+
+- 输入目录中的 JSONL 会原样转换为 CSV，不丢失未知字段；
+- raw episode 中的 `cam_high` 帧会导出为 MP4；
+- 视频默认按 50 FPS 写出，可用 `--video-subsample 2` 降低体积；
+- Matplotlib 是绘图可选依赖，缺少时仍会生成 CSV/JSON/Markdown/MP4；需要 PNG 时在对应环境安装 `matplotlib>=3.10.0`；
+- RLT Stage 1 训练入口会持续写入 `metrics/rlt_metrics.jsonl`、`metrics/config.json` 和 `metrics/invocations.jsonl`，因此训练中断或恢复后仍能生成完整曲线。
