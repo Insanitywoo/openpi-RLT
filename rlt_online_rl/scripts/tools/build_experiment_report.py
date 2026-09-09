@@ -14,13 +14,13 @@ Examples:
 
 from __future__ import annotations
 
-# ruff: noqa: RUF001
+# ruff: noqa: RUF001, UP017
 import argparse
 from collections.abc import Iterable
 import csv
 import dataclasses
-from datetime import UTC
 from datetime import datetime
+from datetime import timezone
 import json
 import math
 from pathlib import Path
@@ -416,7 +416,9 @@ def main() -> int:
     if args.video_subsample < 1:
         raise ValueError("--video-subsample must be >= 1")
     output_dir = (
-        (args.output_dir or (run_dir / "reports" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))).expanduser().resolve()
+        (args.output_dir or (run_dir / "reports" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")))
+        .expanduser()
+        .resolve()
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -516,7 +518,8 @@ def main() -> int:
         "episode_summary.csv": _write_csv(output_dir / "episode_summary.csv", episode_summaries),
     }
     metadata = {
-        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "report_schema_version": 1,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_dir": str(run_dir),
         "git_revision": _git_revision(),
         "summary": summary,
