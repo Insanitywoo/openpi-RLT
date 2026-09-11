@@ -120,6 +120,12 @@ def _run_episode(
                 feature_client.get_features(observation), system.rl, observation=observation
             )
             ref_chunk = np.asarray(payload["ref_chunk"], dtype=np.float32)
+            full_ref_chunk = np.asarray(payload.get("full_ref_chunk"), dtype=np.float32)
+            if full_ref_chunk.ndim != 2 or full_ref_chunk.shape[1] < 14:
+                raise ValueError(
+                    "Gym-ALOHA transfer_cube evaluation requires Machine A full_ref_chunk [T, 14]; "
+                    "a 7-D slice cannot execute the bimanual task."
+                )
             action_chunk = ref_chunk.copy()
             source = 0
             if condition == "actor_refined":
@@ -146,7 +152,8 @@ def _run_episode(
             for _local_step, (raw_action, raw_ref_action) in enumerate(zip(action_chunk, ref_chunk, strict=True)):
                 action = np.asarray(raw_action, dtype=np.float32)
                 ref_action = np.asarray(raw_ref_action, dtype=np.float32)
-                next_observation, reward, terminated, truncated, info = env.step(action)
+                full_action = env.merge_active_arm_with_full_reference(action, full_ref_chunk[_local_step])
+                next_observation, reward, terminated, truncated, info = env.step_full(full_action)
                 done = bool(terminated or truncated)
                 observation = next_observation
                 observations.append(observation)

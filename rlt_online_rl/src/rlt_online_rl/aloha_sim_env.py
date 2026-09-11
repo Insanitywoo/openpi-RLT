@@ -73,7 +73,24 @@ class AlohaSingleArmChunkEnv:
         single_arm = np.asarray(action, dtype=np.float32).reshape(-1)
         if single_arm.shape != (7,):
             raise ValueError(f"Expected a 7-D {self._arm}-arm action, got {single_arm.shape}.")
-        full_action = self._merge_single_arm_action(single_arm)
+        return self.step_full(self._merge_single_arm_action(single_arm))
+
+    def step_full(self, full_action: np.ndarray) -> tuple[dict[str, Any], float, bool, bool, dict[str, Any]]:
+        """Step with an explicit standard-ALOHA 14-D absolute joint action.
+
+        ``gym_aloha`` advertises generic ``[-1, 1]`` Box bounds even though its
+        joint-position task contract legitimately contains values such as
+        elbow=1.16. Clipping to that Box silently corrupts replayed demos and
+        VLA reference actions, so this adapter validates shape/finite values
+        but deliberately preserves the original absolute controls.
+        """
+        if self._last_raw_obs is None:
+            raise RuntimeError("Call reset() before step_full().")
+        full_action = np.asarray(full_action, dtype=np.float32).reshape(-1)
+        if full_action.shape != (14,):
+            raise ValueError(f"Expected a full 14-D ALOHA action, got {full_action.shape}.")
+        if not np.all(np.isfinite(full_action)):
+            raise ValueError("Full ALOHA action must contain only finite values.")
         raw_obs, reward, terminated, truncated, info = self._gym.step(full_action)
         self._last_raw_obs = raw_obs
         self._env_steps += 1
@@ -83,7 +100,7 @@ class AlohaSingleArmChunkEnv:
         info = dict(info)
         info["success"] = int(bool(info.get("is_success", False)))
         info["active_arm"] = self._arm
-        info["full_action"] = full_action
+        info["full_action"] = full_action.copy()
         return self._convert_observation(raw_obs), float(reward), bool(terminated), truncated, info
 
     def execute_chunk(
@@ -99,10 +116,13 @@ class AlohaSingleArmChunkEnv:
         plan = policy_planner(start_observation, 0)
         action_chunk = np.asarray(plan.action_chunk, dtype=np.float32)
         ref_chunk = np.asarray(plan.ref_chunk, dtype=np.float32)
+        full_ref_chunk = None if plan.full_ref_chunk is None else np.asarray(plan.full_ref_chunk, dtype=np.float32)
         if action_chunk.ndim != 2 or action_chunk.shape[1] < 7:
             raise ValueError(f"action_chunk must be [T, >=7], got {action_chunk.shape}.")
         if ref_chunk.ndim != 2 or ref_chunk.shape[1] < 7:
             raise ValueError(f"ref_chunk must be [T, >=7], got {ref_chunk.shape}.")
+        if full_ref_chunk is not None and (full_ref_chunk.ndim != 2 or full_ref_chunk.shape[1] < 14):
+            raise ValueError(f"full_ref_chunk must be [T, >=14], got {full_ref_chunk.shape}.")
 
         rewards: list[float] = []
         trace: list[dict[str, Any]] = []
@@ -113,7 +133,14 @@ class AlohaSingleArmChunkEnv:
             observation = next_observation
             action = action_chunk[local_step, :7]
             ref_action = ref_chunk[local_step, :7]
-            next_observation, reward, terminated, truncated, info = self.step(action)
+            if full_ref_chunk is None:
+                # Backward-compatible fallback for environments that intentionally
+                # hold the passive arm. Transfer-cube evaluation always supplies
+                # a full VLA chunk.
+                full_action = self._merge_single_arm_action(action)
+            else:
+                full_action = self.merge_active_arm_with_full_reference(action, full_ref_chunk[local_step])
+            next_observation, reward, terminated, truncated, info = self.step_full(full_action)
             done = bool(terminated or truncated)
             success = int(info.get("success", 0))
             rewards.append(float(reward))
@@ -148,6 +175,18 @@ class AlohaSingleArmChunkEnv:
             },
         )
 
+    def merge_active_arm_with_full_reference(self, action: np.ndarray, full_reference: np.ndarray) -> np.ndarray:
+        """Replace only the active arm in a standard 14-D VLA reference."""
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+        full_reference = np.asarray(full_reference, dtype=np.float32).reshape(-1)
+        if action.shape != (7,):
+            raise ValueError(f"Expected a 7-D {self._arm}-arm action, got {action.shape}.")
+        if full_reference.shape != (14,):
+            raise ValueError(f"Expected a 14-D VLA reference action, got {full_reference.shape}.")
+        full_action = full_reference.copy()
+        full_action[self._arm_slice] = action
+        return full_action
+
     def _merge_single_arm_action(self, action: np.ndarray) -> np.ndarray:
         full = np.empty((14,), dtype=np.float32)
         if self._arm == "left":
@@ -156,7 +195,7 @@ class AlohaSingleArmChunkEnv:
         else:
             full[:7] = self._passive_arm_action
             full[7:14] = action
-        return np.clip(full, self._gym.action_space.low, self._gym.action_space.high)
+        return full
 
     def _convert_observation(self, raw_obs: dict[str, Any]) -> dict[str, Any]:
         image = np.asarray(raw_obs["pixels"]["top"], dtype=np.uint8)

@@ -62,3 +62,24 @@ def test_fake_env_rejects_wrong_action_shape() -> None:
     env.reset()
     with pytest.raises(ValueError, match="Expected action shape"):
         env.step(np.zeros((6,), dtype=np.float32))
+
+
+def test_aloha_full_reference_preserves_passive_arm_and_joint_ranges() -> None:
+    from rlt_online_rl.aloha_sim_env import AlohaSingleArmChunkEnv
+
+    env = AlohaSingleArmChunkEnv(seed=0, max_env_steps=3)
+    try:
+        observation = env.reset()
+        full_reference = np.asarray(observation["state"], dtype=np.float32)
+        full_reference[2] = 1.16
+        active = np.array([0.1, -0.8, 1.2, 0.2, -0.4, 0.1, 0.7], dtype=np.float32)
+
+        merged_reference = env.merge_active_arm_with_full_reference(active, full_reference)
+        assert np.allclose(merged_reference[:7], active)
+        assert np.allclose(merged_reference[7:], full_reference[7:])
+        assert np.isclose(merged_reference[9], 1.16)
+
+        _, _, _, _, info = env.step_full(full_reference)
+        assert np.isclose(info["full_action"][2], 1.16)
+    finally:
+        env.close()

@@ -266,14 +266,20 @@ class RLTPolicy(_base_policy.BasePolicy):
         n = min(PROPRIO_DIM, raw_state.shape[0])
         proprio[:n] = raw_state[:n].astype(np.float32)
 
-        # ref_chunk
-        vla_actions = outputs["actions"]
-        ref_chunk = vla_actions[:CHUNK_LEN, :ACTION_DIM].astype(np.float32)
+        # The Actor uses one explicit 7-D arm slice. The environment also
+        # receives the complete bimanual VLA reference so the passive arm can
+        # follow the task plan instead of being frozen during transfer_cube.
+        vla_actions = np.asarray(outputs["actions"], dtype=np.float32)
+        if vla_actions.ndim != 2 or vla_actions.shape[1] < 14:
+            raise ValueError(f"Expected ALOHA VLA actions [T, >=14], got {vla_actions.shape}.")
+        full_ref_chunk = vla_actions[:CHUNK_LEN, :14].astype(np.float32, copy=False)
+        ref_chunk = full_ref_chunk[:, :ACTION_DIM]
 
         return {
             "z_rl": z_rl,
             "proprio": proprio,
             "ref_chunk": ref_chunk,
+            "full_ref_chunk": full_ref_chunk,
             "policy_timing": {"infer_ms": infer_time * 1000},
             "_raw_actions": outputs["actions"],
             "_raw_rl_token": rl_token,
@@ -381,6 +387,7 @@ def main(args: Args) -> None:
             "proprio_dim": PROPRIO_DIM,
             "chunk_len": CHUNK_LEN,
             "action_dim": ACTION_DIM,
+            "full_action_dim": 14,
             "supports_batch": True,
             "shared_prefix_inference": args.shared_prefix_inference,
         },

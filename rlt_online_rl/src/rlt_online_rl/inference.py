@@ -136,6 +136,9 @@ class PolicyPlan:
     source: int
     start_features: ChunkFeatures
     actor_param_version: int = -1
+    # A 7-D Actor edits one named arm. Bimanual environments can preserve the
+    # other arm by following this complete 14-D VLA reference trajectory.
+    full_ref_chunk: np.ndarray | None = None
 
 
 def _coerce_feature_vector(name: str, value: Any, expected_dim: int) -> np.ndarray:
@@ -192,6 +195,14 @@ def normalize_feature_payload(
         min_chunk_len=rl_config.chunk_len,
         min_action_dim=rl_config.action_dim,
     )[: rl_config.chunk_len, : rl_config.action_dim]
+    # Do not derive missing bimanual controls by repeating or slicing the
+    # 7-D Actor reference. Machine A must explicitly provide this trajectory.
+    if "full_ref_chunk" in payload:
+        normalized["full_ref_chunk"] = _coerce_ref_chunk(
+            payload["full_ref_chunk"],
+            min_chunk_len=rl_config.chunk_len,
+            min_action_dim=14,
+        )[: rl_config.chunk_len, :14]
     return normalized
 
 
@@ -790,12 +801,14 @@ class EnvDriver:
                         )
                 if self._safe_action_filter is not None:
                     action_chunk = self._safe_action_filter(action_chunk)
+                full_ref_chunk = current.get("full_ref_chunk")
                 return PolicyPlan(
                     action_chunk=np.asarray(action_chunk, dtype=np.float32),
                     ref_chunk=np.asarray(ref_chunk, dtype=np.float32),
                     source=int(source),
                     start_features=current_features,
                     actor_param_version=actor_param_version,
+                    full_ref_chunk=None if full_ref_chunk is None else np.asarray(full_ref_chunk, dtype=np.float32),
                 )
 
             next_observation, rewards, done, info = self._execute_chunk(observation, _policy_planner)
