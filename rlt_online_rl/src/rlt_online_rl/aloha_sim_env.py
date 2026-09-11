@@ -46,7 +46,7 @@ class AlohaSingleArmChunkEnv:
         self._arm = arm
         self._arm_slice = slice(0, 7) if arm == "left" else slice(7, 14)
         self._seed = int(seed)
-        self._rng = np.random.default_rng(seed)
+        self._reset_count = 0
         self._max_env_steps = int(max_env_steps)
         self._prompt = str(prompt)
         self._last_raw_obs: dict[str, Any] | None = None
@@ -60,7 +60,13 @@ class AlohaSingleArmChunkEnv:
         return "online:aloha_single_arm_sim"
 
     def reset(self) -> dict[str, Any]:
-        raw_obs, _ = self._gym.reset(seed=int(self._rng.integers(2**32 - 1)))
+        # Make the requested seed observable and replayable: the first reset
+        # uses ``seed`` exactly, subsequent resets use seed+episode_index.
+        # The previous RNG-derived reset seed was reproducible but made it
+        # impossible to align a known LeRobot episode with Gym-ALOHA seed N.
+        reset_seed = self._seed + self._reset_count
+        self._reset_count += 1
+        raw_obs, _ = self._gym.reset(seed=reset_seed)
         self._last_raw_obs = raw_obs
         state = np.asarray(raw_obs["agent_pos"], dtype=np.float32)
         self._passive_arm_action = state[7:14].copy() if self._arm == "left" else state[0:7].copy()
