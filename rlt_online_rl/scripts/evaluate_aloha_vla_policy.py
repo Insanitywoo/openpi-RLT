@@ -43,6 +43,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-env-steps", type=int, default=300)
     parser.add_argument("--chunk-horizon", type=int, default=10)
     parser.add_argument("--prompt", default="Transfer cube")
+    parser.add_argument("--store-episodes", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -57,7 +58,7 @@ def _run_episode(
     episode_id: int,
     seed: int,
     args: argparse.Namespace,
-    episodes_dir: Path,
+    episodes_dir: Path | None,
 ) -> dict[str, Any]:
     env = AlohaSingleArmChunkEnv(seed=seed, max_env_steps=args.max_env_steps, prompt=args.prompt)
     observation = env.reset()
@@ -121,17 +122,19 @@ def _run_episode(
             chunk_id += 1
     finally:
         env.close()
-    trace = RawEpisodeTrace(
-        episode_id=episode_id,
-        chunk_len=args.chunk_horizon,
-        observations=observations,
-        steps=steps,
-        chunks=chunks,
-        summary={"condition": "vla_reference", "seed": seed, "duration_sec": time.time() - started},
-    )
-    path = episodes_dir / f"episode_{episode_id:06d}.pkl"
-    with path.open("wb") as handle:
-        pickle.dump(trace, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    path: Path | None = None
+    if episodes_dir is not None:
+        trace = RawEpisodeTrace(
+            episode_id=episode_id,
+            chunk_len=args.chunk_horizon,
+            observations=observations,
+            steps=steps,
+            chunks=chunks,
+            summary={"condition": "vla_reference", "seed": seed, "duration_sec": time.time() - started},
+        )
+        path = episodes_dir / f"episode_{episode_id:06d}.pkl"
+        with path.open("wb") as handle:
+            pickle.dump(trace, handle, protocol=pickle.HIGHEST_PROTOCOL)
     return {
         "episode_id": episode_id,
         "seed": seed,
@@ -141,8 +144,8 @@ def _run_episode(
         "raw_step_count": len(steps),
         "raw_chunk_count": len(chunks),
         "duration_sec": time.time() - started,
-        "raw_episode_path": str(path),
-        "video_frame_count": len(frames),
+        "raw_episode_path": None if path is None else str(path),
+        "video_frame_count": len(frames) if path is not None else 0,
     }
 
 
@@ -151,9 +154,10 @@ def main() -> int:
     if args.episodes <= 0 or len(args.seeds) < args.episodes:
         raise ValueError("episodes must be positive and seeds must cover every episode")
     output_dir = args.output_dir.expanduser().resolve()
-    episodes_dir = output_dir / "replay" / "episodes"
+    episodes_dir = output_dir / "replay" / "episodes" if args.store_episodes else None
     metrics_dir = output_dir / "metrics"
-    episodes_dir.mkdir(parents=True, exist_ok=True)
+    if episodes_dir is not None:
+        episodes_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "evaluation_config.json").write_text(
         json.dumps(vars(args), default=str, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
