@@ -50,6 +50,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", default="Transfer cube")
     parser.add_argument("--chunk-horizon", type=int, default=10)
     parser.add_argument("--actor-timeout-sec", type=float, default=5.0)
+    parser.add_argument("--store-episodes", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -92,7 +93,7 @@ def _run_episode(
     system: Any,
     feature_client: MachineAFeatureClient,
     actor_client: ActorClient | None,
-    episodes_dir: Path,
+    episodes_dir: Path | None,
 ) -> dict[str, Any]:
     env = AlohaSingleArmChunkEnv(
         arm=args.arm,
@@ -200,23 +201,25 @@ def _run_episode(
     finally:
         env.close()
 
-    trace = RawEpisodeTrace(
-        episode_id=episode_id,
-        chunk_len=system.rl.chunk_len,
-        observations=observations,
-        steps=steps,
-        chunks=chunks,
-        summary={
-            "condition": condition,
-            "seed": seed,
-            "duration_sec": time.time() - start,
-            "success": success,
-            "reward_sum": total_reward,
-            "actor_versions": sorted(actor_versions),
-        },
-    )
-    episode_path = episodes_dir / f"episode_{episode_id:06d}.pkl"
-    episode_path.write_bytes(__import__("pickle").dumps(trace, protocol=__import__("pickle").HIGHEST_PROTOCOL))
+    episode_path: Path | None = None
+    if episodes_dir is not None:
+        trace = RawEpisodeTrace(
+            episode_id=episode_id,
+            chunk_len=system.rl.chunk_len,
+            observations=observations,
+            steps=steps,
+            chunks=chunks,
+            summary={
+                "condition": condition,
+                "seed": seed,
+                "duration_sec": time.time() - start,
+                "success": success,
+                "reward_sum": total_reward,
+                "actor_versions": sorted(actor_versions),
+            },
+        )
+        episode_path = episodes_dir / f"episode_{episode_id:06d}.pkl"
+        episode_path.write_bytes(__import__("pickle").dumps(trace, protocol=__import__("pickle").HIGHEST_PROTOCOL))
     return {
         "episode_id": episode_id,
         "seed": seed,
@@ -231,8 +234,8 @@ def _run_episode(
         "actor_version_unique_count": len(actor_versions),
         "action_deviation_mean": float(np.mean(action_deviations)) if action_deviations else 0.0,
         "action_deviation_max": max(action_deviations, default=0.0),
-        "raw_episode_path": str(episode_path),
-        "video_frame_count": len(frames),
+        "raw_episode_path": None if episode_path is None else str(episode_path),
+        "video_frame_count": len(frames) if episode_path is not None else 0,
     }
 
 
@@ -243,9 +246,10 @@ def main() -> int:
     if len(args.seeds) < args.episodes:
         raise ValueError("provide at least as many --seeds as --episodes")
     output_dir = args.output_dir.expanduser().resolve()
-    episodes_dir = output_dir / "replay" / "episodes"
+    episodes_dir = output_dir / "replay" / "episodes" if args.store_episodes else None
     metrics_dir = output_dir / "metrics"
-    episodes_dir.mkdir(parents=True, exist_ok=True)
+    if episodes_dir is not None:
+        episodes_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
     system = load_system_config_yaml(str(args.config.expanduser().resolve()))
     _write_config_snapshot(output_dir, args, system)
