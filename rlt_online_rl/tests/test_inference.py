@@ -19,6 +19,7 @@ from rlt_online_rl.config import EnvDriverConfig
 from rlt_online_rl.config import RLTOnlineRLConfig
 from rlt_online_rl.inference import ActorClient
 from rlt_online_rl.inference import ActorRequest
+from rlt_online_rl.inference import ActorResponse
 from rlt_online_rl.inference import ActorService
 from rlt_online_rl.inference import EnvDriver
 from rlt_online_rl.inference import RLTPolicyInferenceWrapper
@@ -272,6 +273,37 @@ def test_client_timeout_fallback_logic() -> None:
         on_error_fallback=True,
     )
     assert result.used_fallback
+    assert np.allclose(result.refined_chunk, ref_chunk)
+
+
+def test_minimum_actor_version_uses_base_reference() -> None:
+    cfg = _config()
+    ref_chunk = np.ones((cfg.chunk_len, cfg.action_dim), dtype=np.float32)
+
+    class _VersionZeroClient:
+        def infer(self, request):
+            return ActorResponse(
+                refined_chunk=np.zeros_like(request.ref_chunk),
+                actor_param_version=0,
+                request_id=request.request_id,
+                timestamp=None,
+                source=int(TransitionSource.RL),
+            )
+
+    result = maybe_refine_chunk(
+        _VersionZeroClient(),
+        z_rl=np.ones((cfg.z_dim,), dtype=np.float32),
+        proprio=np.ones((cfg.proprio_dim,), dtype=np.float32),
+        ref_chunk=ref_chunk,
+        request_id="version-gate",
+        episode_id=0,
+        step_id=0,
+        min_actor_version=1,
+        on_error_fallback=False,
+    )
+    assert not result.used_fallback
+    assert result.source == int(TransitionSource.BASE)
+    assert result.actor_param_version == 0
     assert np.allclose(result.refined_chunk, ref_chunk)
 
 

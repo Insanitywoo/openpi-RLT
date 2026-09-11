@@ -105,6 +105,10 @@ class EnvDriverConfig:
     full_task_reset_action: list[float] | None = None
     critical_phase_reset_action: list[float] | None = None
     actor_deterministic: bool = True
+    # Actor version 0 is the untrained randomly initialized snapshot emitted
+    # by a fresh learner. Keep rollout on the VLA reference until at least one
+    # Actor update has been published.
+    min_actor_version: int = 1
     chunk_exec_horizon: int = 10
     # RLT experiments run the robot at 50 Hz.
     control_frequency_hz: float = 50.0

@@ -529,6 +529,7 @@ def maybe_refine_chunk(
     step_id: int,
     deterministic: bool = False,
     on_error_fallback: bool = True,
+    min_actor_version: int = 0,
 ) -> RefinementResult:
     try:
         response = actor_client.infer(
@@ -543,6 +544,17 @@ def maybe_refine_chunk(
                 timestamp=time.time(),
             )
         )
+        if int(response.actor_param_version) < int(min_actor_version):
+            return RefinementResult(
+                refined_chunk=np.asarray(ref_chunk, dtype=np.float32),
+                source=int(TransitionSource.BASE),
+                actor_param_version=response.actor_param_version,
+                used_fallback=False,
+                error=(
+                    f"actor version {response.actor_param_version} is below required "
+                    f"min_actor_version={min_actor_version}; using VLA reference"
+                ),
+            )
         return RefinementResult(
             refined_chunk=response.refined_chunk,
             source=int(response.source),
@@ -772,6 +784,7 @@ class EnvDriver:
                     step_id=env_step_id + local_step,
                     deterministic=self._env_config.actor_deterministic,
                     on_error_fallback=self._env_config.safe_fallback_to_ref,
+                    min_actor_version=self._env_config.min_actor_version,
                 )
                 plan_request_count += 1
                 action_chunk = refine.refined_chunk
