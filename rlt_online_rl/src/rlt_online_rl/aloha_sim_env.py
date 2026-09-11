@@ -8,7 +8,8 @@ latest joint position.  It never silently truncates a 14-D action.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+import os
 from typing import Any, Literal
 
 import numpy as np
@@ -27,6 +28,7 @@ class AlohaSingleArmChunkEnv:
         task: str = "gym_aloha/AlohaTransferCube-v0",
         arm: ArmName = "left",
         seed: int = 0,
+        reset_seed_sequence: Sequence[int] | None = None,
         max_env_steps: int = 400,
         prompt: str = "Transfer cube",
     ) -> None:
@@ -46,6 +48,11 @@ class AlohaSingleArmChunkEnv:
         self._arm = arm
         self._arm_slice = slice(0, 7) if arm == "left" else slice(7, 14)
         self._seed = int(seed)
+        self._reset_seed_sequence = (
+            None if reset_seed_sequence is None else tuple(int(value) for value in reset_seed_sequence)
+        )
+        if self._reset_seed_sequence is not None and not self._reset_seed_sequence:
+            raise ValueError("reset_seed_sequence must not be empty when provided.")
         self._reset_count = 0
         self._max_env_steps = int(max_env_steps)
         self._prompt = str(prompt)
@@ -64,7 +71,10 @@ class AlohaSingleArmChunkEnv:
         # uses ``seed`` exactly, subsequent resets use seed+episode_index.
         # The previous RNG-derived reset seed was reproducible but made it
         # impossible to align a known LeRobot episode with Gym-ALOHA seed N.
-        reset_seed = self._seed + self._reset_count
+        if self._reset_seed_sequence is None:
+            reset_seed = self._seed + self._reset_count
+        else:
+            reset_seed = self._reset_seed_sequence[self._reset_count % len(self._reset_seed_sequence)]
         self._reset_count += 1
         raw_obs, _ = self._gym.reset(seed=reset_seed)
         self._last_raw_obs = raw_obs
@@ -219,3 +229,30 @@ class AlohaSingleArmChunkEnv:
             "state": state14.copy(),
             "prompt": self._prompt,
         }
+
+
+def create_aloha_single_arm_env() -> AlohaSingleArmChunkEnv:
+    """Factory for ``run_online_rl.py --env-factory`` with explicit seed control.
+
+    Environment variables intentionally make the rollout seed schedule a CFS
+    experiment-level setting rather than a hidden code edit:
+
+    * ``RLT_ALOHA_ENV_SEED``: base sequential reset seed (default ``0``);
+    * ``RLT_ALOHA_ENV_SEED_SEQUENCE``: optional comma-separated cyclic seeds;
+    * ``RLT_ALOHA_ACTIVE_ARM``: ``left`` or ``right`` (default ``left``);
+    * ``RLT_ALOHA_MAX_ENV_STEPS``: positive episode limit (default ``300``).
+    """
+    seed_sequence_text = os.environ.get("RLT_ALOHA_ENV_SEED_SEQUENCE", "").strip()
+    seed_sequence = None
+    if seed_sequence_text:
+        seed_sequence = [int(value.strip()) for value in seed_sequence_text.split(",") if value.strip()]
+    arm = os.environ.get("RLT_ALOHA_ACTIVE_ARM", "left")
+    if arm not in ("left", "right"):
+        raise ValueError(f"RLT_ALOHA_ACTIVE_ARM must be left or right, got {arm!r}.")
+    return AlohaSingleArmChunkEnv(
+        arm=arm,
+        seed=int(os.environ.get("RLT_ALOHA_ENV_SEED", "0")),
+        reset_seed_sequence=seed_sequence,
+        max_env_steps=int(os.environ.get("RLT_ALOHA_MAX_ENV_STEPS", "300")),
+        prompt=os.environ.get("RLT_ALOHA_PROMPT", "Transfer cube"),
+    )
