@@ -1016,8 +1016,20 @@ _CONFIGS = [
             repo_id="lerobot/aloha_sim_transfer_cube_human",
             default_prompt="Transfer cube",
             use_delta_joint_actions=False,
+            # Use the immutable public-v3 offline mirror. The pinned LeRobot
+            # client otherwise attempts a legacy per-episode re-download.
+            local_dataset_root=ALOHA_SIM_DATASET_ROOT,
+            # Preserve the Pi0 base model's Trossen normalization asset ID so
+            # checkpoints saved by supervised ALOHA fine-tuning can be served
+            # by the same config without an asset-id mismatch.
+            assets=AssetsConfig(
+                assets_dir="gs://openpi-assets/checkpoints/pi0_base/assets",
+                asset_id="trossen",
+            ),
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
+        batch_size=1,
+        num_workers=2,
         num_train_steps=20_000,
     ),
     # Public ALOHA sim RLT baseline. The public dataset uses the consolidated
