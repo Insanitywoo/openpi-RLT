@@ -267,6 +267,7 @@ def _plot_series(
 def _save_plots(
     output_dir: Path,
     rlt_metrics: list[dict[str, Any]],
+    supervised_metrics: list[dict[str, Any]],
     online_learner: list[dict[str, Any]],
     rollout: list[dict[str, Any]],
     episodes: list[dict[str, Any]],
@@ -312,6 +313,24 @@ def _save_plots(
         for ax in axes.flat:
             ax.set_xlabel("global_step")
         path = output_dir / "rlt_training_metrics.png"
+        fig.savefig(path, dpi=140)
+        plt.close(fig)
+        plots.append(path.name)
+    if supervised_metrics:
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5), constrained_layout=True)
+        for ax, key, title, color in (
+            (axes[0], "loss", "Supervised loss", "tab:blue"),
+            (axes[1], "grad_norm", "Gradient norm", "tab:red"),
+            (axes[2], "param_norm", "Parameter norm", "tab:purple"),
+        ):
+            _plot_series(ax, supervised_metrics, key, label=key, color=color)
+            ax.set_title(title)
+            ax.set_xlabel("global_step")
+            ax.grid(alpha=0.3)
+            handles, labels = ax.get_legend_handles_labels()
+            if handles:
+                ax.legend(handles, labels)
+        path = output_dir / "supervised_training_metrics.png"
         fig.savefig(path, dpi=140)
         plt.close(fig)
         plots.append(path.name)
@@ -428,6 +447,9 @@ def main() -> int:
     rlt_metrics = _read_jsonl(run_dir / "metrics" / "rlt_metrics.jsonl")
     if not rlt_metrics:
         rlt_metrics = _read_jsonl(run_dir / "rlt_metrics.jsonl")
+    supervised_metrics = _read_jsonl(run_dir / "metrics" / "training_metrics.jsonl")
+    if not supervised_metrics:
+        supervised_metrics = _read_jsonl(run_dir / "training_metrics.jsonl")
 
     episode_summaries: list[dict[str, Any]] = []
     episode_paths = sorted((run_dir / "replay" / "episodes").glob("episode_*.pkl"))
@@ -456,6 +478,7 @@ def main() -> int:
         "rollout_records": len(online_rollout),
         "replay_stats_records": len(replay_stats),
         "rlt_metric_records": len(rlt_metrics),
+        "supervised_metric_records": len(supervised_metrics),
         "raw_episodes": len(episode_summaries),
     }
     summary: dict[str, Any] = dict(counts)
@@ -487,6 +510,17 @@ def main() -> int:
                 ),
             }
         )
+    if supervised_metrics:
+        latest = supervised_metrics[-1]
+        supervised_losses = [_safe_float(row.get("loss"), default=float("nan")) for row in supervised_metrics]
+        supervised_losses = [value for value in supervised_losses if math.isfinite(value)]
+        summary.update(
+            {
+                "latest_supervised_step": latest.get("global_step", latest.get("step")),
+                "latest_supervised_loss": latest.get("loss"),
+                "best_supervised_loss": min(supervised_losses) if supervised_losses else None,
+            }
+        )
     if rlt_metrics:
         latest = rlt_metrics[-1]
         losses = [_safe_float(row.get("rlt_loss", row.get("loss")), default=float("nan")) for row in rlt_metrics]
@@ -515,6 +549,7 @@ def main() -> int:
         "rollout_metrics.csv": _write_csv(output_dir / "rollout_metrics.csv", online_rollout),
         "replay_stats.csv": _write_csv(output_dir / "replay_stats.csv", replay_stats),
         "rlt_metrics.csv": _write_csv(output_dir / "rlt_metrics.csv", rlt_metrics),
+        "training_metrics.csv": _write_csv(output_dir / "training_metrics.csv", supervised_metrics),
         "episode_summary.csv": _write_csv(output_dir / "episode_summary.csv", episode_summaries),
     }
     metadata = {
@@ -531,7 +566,7 @@ def main() -> int:
     plots = (
         []
         if args.skip_plots
-        else _save_plots(output_dir, rlt_metrics, online_learner, online_rollout, episode_summaries)
+        else _save_plots(output_dir, rlt_metrics, supervised_metrics, online_learner, online_rollout, episode_summaries)
     )
     videos = (
         []

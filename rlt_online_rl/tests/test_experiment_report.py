@@ -27,6 +27,10 @@ def test_build_experiment_report_exports_durable_tables(tmp_path: Path) -> None:
         json.dumps({"episode_id": 7, "success": 1, "fallback_count": 0, "dropped_transitions": 0}) + "\n",
         encoding="utf-8",
     )
+    (metrics_dir / "training_metrics.jsonl").write_text(
+        json.dumps({"global_step": 1, "loss": 0.5, "grad_norm": 0.2, "param_norm": 1.0}) + "\n",
+        encoding="utf-8",
+    )
     observations = [
         {"images": {"cam_high": np.zeros((3, 8, 10), dtype=np.uint8)}},
         {"images": {"cam_high": np.ones((3, 8, 10), dtype=np.uint8)}},
@@ -74,7 +78,9 @@ def test_build_experiment_report_exports_durable_tables(tmp_path: Path) -> None:
     assert summary["summary"]["latest_global_step"] == 1
     assert summary["summary"]["raw_episodes"] == 1
     assert summary["summary"]["raw_success_rate"] == 1.0
+    assert summary["summary"]["latest_supervised_loss"] == 0.5
     assert (report_dir / "learner_metrics.csv").read_text(encoding="utf-8").startswith("global_step")
+    assert (report_dir / "training_metrics.csv").read_text(encoding="utf-8").startswith("global_step")
     episode_csv = (report_dir / "episode_summary.csv").read_text(encoding="utf-8")
     assert "action_deviation_mean" in episode_csv
     assert "2.645" in episode_csv
